@@ -1,0 +1,15 @@
+{
+  "sae_class": "VanillaSAE",
+  "embeddings_path": "assets/embeddings.json",
+  "output_path": "assets/output",
+  "d_hidden": 4096,
+  "sparsity_coeffs_min_exponent": -5.0,
+  "sparsity_coeffs_max_exponent": 1.5,
+  "sparsity_coeffs_steps": 128,
+  "train_batch_size": 128,
+  "validation_batch_size": 512,
+  "num_epochs": 128,
+  "learning_rate": 0.0001,
+  "adam_betas": [0.9, 0.999],
+  "resample_latents_epochs": 1.0
+}
