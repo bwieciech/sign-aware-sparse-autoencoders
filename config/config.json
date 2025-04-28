@@ -1,0 +1,19 @@
+{
+  "sae_class": null,
+  "embeddings_path": null,
+  "output_path": null,
+  "d_hidden": 512,
+  "sparsity_coeffs_min_exponent": -6.0,
+  "sparsity_coeffs_max_exponent": 2.0,
+  "sparsity_coeffs_steps": 10,
+  "train_batch_size": 128,
+  "validation_batch_size": 512,
+  "num_epochs": 512,
+  "learning_rate": 0.0001,
+  "adam_betas": [0.9, 0.999],
+  "resample_latents_epochs": 1.0,
+  "early_stopping_patience": null,
+  "early_stopping_min_delta": null,
+  "allow_activation_discontinuity": null,
+  "reset_activation_offsets_on_resample": null
+}
