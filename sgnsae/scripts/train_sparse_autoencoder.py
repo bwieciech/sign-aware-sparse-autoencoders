@@ -103,7 +103,7 @@ def print_progress(
 
 
 def log_metrics(
-    metrics: Dict[str, Any],
+    metrics: List[Dict[str, Any]],
     sparsity_coeffs: Tensor,
     losses_dict: Dict[str, Tensor],
     mean_active_latents_per_instance: Tensor,
@@ -111,30 +111,19 @@ def log_metrics(
     epoch_step: int,
     wandb_run: Optional[Run],
 ) -> None:
-    for loss_name, loss_values in losses_dict.items():
-        for loss_value, sparsity_coeff in zip(
-            loss_values.cpu().detach().numpy(), sparsity_coeffs.cpu().numpy()
-        ):
-            metrics[loss_name].append(
-                {
-                    "epoch": epoch,
-                    "epoch_step": epoch_step,
-                    "value": loss_value.item(),
-                    "sparsity_coeff": sparsity_coeff.item(),
-                }
-            )
-    for active_latents, sparsity_coeff in zip(
-        mean_active_latents_per_instance.cpu().detach().numpy(),
-        sparsity_coeffs.cpu().numpy(),
-    ):
-        metrics["active_latents"].append(
-            {
-                "epoch": epoch,
-                "epoch_step": epoch_step,
-                "value": active_latents.item(),
-                "sparsity_coeff": sparsity_coeff.item(),
-            }
-        )
+    for sparsity_coeff_idx, sparsity_coeff in enumerate(sparsity_coeffs.cpu().numpy()):
+        entry = {
+            "epoch": epoch,
+            "epoch_step": epoch_step,
+            "sparsity_coeff": sparsity_coeff.item(),
+            "active_latents": mean_active_latents_per_instance[sparsity_coeff_idx]
+            .cpu()
+            .item(),
+        }
+        for loss_name, loss_values in losses_dict.items():
+            entry[loss_name] = loss_values[sparsity_coeff_idx].cpu().item()
+        metrics.append(entry)
+
     if wandb_run is not None:
         wandb_run.log(
             {
@@ -166,7 +155,7 @@ def run_training_step(
     batch: Tensor,
     optimizer: torch.optim.Optimizer,
     sparsity_coeffs: Tensor,
-    metrics: Dict[str, Any],
+    metrics: List[Dict[str, Any]],
     epoch: int,
     num_epochs: int,
     step: int,
@@ -235,7 +224,7 @@ def persist_metadata(
 
 
 def persist_metrics(
-    metrics: Dict[str, Any], config: TrainingConfig, wandb_run: Optional[Run]
+    metrics: List[Dict[str, Any]], config: TrainingConfig, wandb_run: Optional[Run]
 ) -> None:
     os.makedirs(config.output_path, exist_ok=True)
     metrics_filename = (
@@ -296,7 +285,7 @@ def train_sparse_autoencoder(
 
     dataloader = instantiate_dataloader(config, embeddings_file["embeddings"], device)
 
-    metrics = defaultdict(list)
+    metrics = []
     inactive_latents_count = torch.zeros(
         config.sparsity_coeffs_steps, config.d_hidden, device=device
     )
