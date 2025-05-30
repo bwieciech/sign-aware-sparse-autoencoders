@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 
 import einops
 import torch
@@ -7,20 +7,28 @@ from torch import Tensor
 from sgnsae.models import SAEBase
 
 
-class VanillaSAE(SAEBase):
+class SAE(SAEBase):
     def __init__(
         self,
         n_instances: int,
         d_in: int,
         d_hidden: int,
         resample_latents_threshold: int,
-        device: str,
+        sign_aware: bool,
+        reset_activation_offsets_on_resample: Optional[bool] = None,
+        device: str = "cpu",
     ):
         super().__init__(
-            n_instances, d_in, d_hidden, resample_latents_threshold, device
+            n_instances,
+            d_in,
+            d_hidden,
+            resample_latents_threshold,
+            device,
+            sign_aware=sign_aware,
+            reset_activation_offsets_on_resample=reset_activation_offsets_on_resample,
         )
 
-    def forward(self, x: torch.Tensor) -> Dict[str, Tensor]:
+    def forward(self, x: Tensor) -> Dict[str, Tensor]:
         if x.ndim < 2 or x.ndim > 3:
             raise ValueError(f"Invalid dimension count of input: {x.ndim}")
         x = x.to(self.device)
@@ -35,7 +43,13 @@ class VanillaSAE(SAEBase):
             )
             + self.b_enc
         )
-        latents = torch.relu(x)
+
+        if self.sign_aware:
+            latents = (x.abs() > self.act_offset) * torch.where(
+                x > 0, x - self.act_offset, x + self.act_offset
+            )
+        else:
+            latents = torch.relu(x)
 
         W_dec_norm = self.W_dec / (self.W_dec.norm(dim=1, keepdim=True) + 1e-8)
         x_hat = (

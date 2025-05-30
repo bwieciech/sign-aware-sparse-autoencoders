@@ -3,7 +3,7 @@ import os
 from argparse import Namespace, ArgumentParser
 
 from sgnsae.config import TrainingConfig
-from sgnsae.models import PosNegSAE
+from sgnsae.models import SAE
 from sgnsae.scripts.train_sparse_autoencoder import train_sparse_autoencoder
 
 
@@ -32,7 +32,7 @@ def parse_arguements() -> Namespace:
     parser.add_argument("--resample-latents-epochs", type=float, default=1.0)
     parser.add_argument("--early-stopping-patience", type=int, default=None)
     parser.add_argument("--early-stopping-min-delta", type=float, default=None)
-    parser.add_argument("--allow-activation-discontinuity", type=int, default=0)
+    parser.add_argument("--sign-aware", type=int, required=True)
     parser.add_argument("--reset-activation-offsets-on-resample", type=int, default=0)
     parser.add_argument("--wandb-project", type=str, default=None)
     parser.add_argument(
@@ -61,13 +61,11 @@ if __name__ == "__main__":
         resample_latents_epochs=args.resample_latents_epochs,
         early_stopping_patience=args.early_stopping_patience,
         early_stopping_min_delta=args.early_stopping_min_delta,
-        allow_activation_discontinuity=bool(args.allow_activation_discontinuity)
-        if args.sae_class == PosNegSAE.__name__
-        else None,
+        sign_aware=bool(args.sign_aware),
         reset_activation_offsets_on_resample=bool(
             args.reset_activation_offsets_on_resample
         )
-        if args.sae_class == PosNegSAE.__name__
+        if args.sae_class == SAE.__name__ and bool(args.sign_aware)
         else None,
         wandb_project=args.wandb_project,
     )

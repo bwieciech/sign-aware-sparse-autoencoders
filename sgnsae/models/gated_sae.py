@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 
 import einops
 import torch
@@ -14,10 +14,18 @@ class GatedSAE(SAEBase):
         d_in: int,
         d_hidden: int,
         resample_latents_threshold: int,
-        device: str,
+        sign_aware: bool,
+        reset_activation_offsets_on_resample: Optional[bool] = None,
+        device: str = "cpu",
     ):
         super().__init__(
-            n_instances, d_in, d_hidden, resample_latents_threshold, device
+            n_instances,
+            d_in,
+            d_hidden,
+            resample_latents_threshold,
+            device,
+            sign_aware=sign_aware,
+            reset_activation_offsets_on_resample=reset_activation_offsets_on_resample,
         )
         self.r_mag = torch.nn.Parameter(
             torch.zeros(n_instances, d_hidden, device=device)
@@ -54,7 +62,14 @@ class GatedSAE(SAEBase):
             )
             + self.b_enc
         )
-        f_gate = (pi_gate > 0).float()
+        if self.sign_aware:
+            f_gate = torch.where(
+                pi_gate > self.act_offset,
+                1,
+                torch.where(pi_gate < -self.act_offset, -1, 0),
+            ).float()
+        else:
+            f_gate = (pi_gate > 0).float()
         latents = f_gate * f_mag
         W_dec_norm = self.W_dec / (self.W_dec.norm(dim=1, keepdim=True) + 1e-8)
         x_hat = (

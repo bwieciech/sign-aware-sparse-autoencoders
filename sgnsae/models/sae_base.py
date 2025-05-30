@@ -1,5 +1,5 @@
 import abc
-from typing import Dict
+from typing import Dict, Optional
 
 import torch.nn
 from torch import Tensor
@@ -13,6 +13,8 @@ class SAEBase(abc.ABC, torch.nn.Module):
         d_hidden: int,
         resample_latents_threshold: int,
         device: str,
+        sign_aware: bool = False,
+        reset_activation_offsets_on_resample: Optional[bool] = None,
     ):
         super().__init__()
 
@@ -21,6 +23,20 @@ class SAEBase(abc.ABC, torch.nn.Module):
         self.d_hidden = d_hidden
         self.resample_latents_threshold = resample_latents_threshold
         self.device = device
+        self.sign_aware = sign_aware
+
+        if sign_aware:
+            if reset_activation_offsets_on_resample is None:
+                raise ValueError(
+                    "reset_activation_offsets_on_resample must be specified when sign_aware is 'true"
+                    ""
+                )
+            self.act_offset = torch.nn.Parameter(
+                1e-3 * torch.ones(n_instances, d_hidden, device=device)
+            )
+            self.reset_activation_offsets_on_resample = (
+                reset_activation_offsets_on_resample
+            )
 
         self.W_enc = torch.nn.Parameter(
             torch.nn.init.kaiming_uniform_(
@@ -64,5 +80,10 @@ class SAEBase(abc.ABC, torch.nn.Module):
             resample_latents_count, device=self.device
         )
         self.W_dec.transpose(-1, -2).data[resample_latents_mask] = new_weights
+
+        if self.sign_aware and self.reset_activation_offsets_on_resample:
+            self.act_offset.data[resample_latents_mask] = 1e-3 * torch.ones(
+                resample_latents_count, device=self.device
+            )
 
         return resample_latents_mask

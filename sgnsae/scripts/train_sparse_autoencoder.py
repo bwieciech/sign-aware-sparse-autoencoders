@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from wandb.apis.public import Run
 
 from sgnsae.config import TrainingConfig
-from sgnsae.models import PosNegSAE, GatedSAE, VanillaSAE
+from sgnsae.models import SAE, GatedSAE
 
 
 def parse_arguements() -> Namespace:
@@ -56,26 +56,16 @@ def instantiate_dataloader(
 def instantiate_model(
     config: TrainingConfig, d_in: int, steps_per_epoch: int, device: str
 ) -> torch.nn.Module:
-    if config.sae_class == VanillaSAE.__name__:
-        return VanillaSAE(
+    if config.sae_class == SAE.__name__:
+        return SAE(
             n_instances=config.sparsity_coeffs_steps,
             d_in=d_in,
             d_hidden=config.d_hidden,
             resample_latents_threshold=int(
                 steps_per_epoch * config.resample_latents_epochs
             ),
-            device=device,
-        )
-    if config.sae_class == PosNegSAE.__name__:
-        return PosNegSAE(
-            n_instances=config.sparsity_coeffs_steps,
-            d_in=d_in,
-            d_hidden=config.d_hidden,
-            resample_latents_threshold=int(
-                steps_per_epoch * config.resample_latents_epochs
-            ),
+            sign_aware=config.sign_aware,
             reset_activation_offsets_on_resample=config.reset_activation_offsets_on_resample,
-            allow_activation_discontinuity=config.allow_activation_discontinuity,
             device=device,
         )
     if config.sae_class == GatedSAE.__name__:
@@ -86,6 +76,8 @@ def instantiate_model(
             resample_latents_threshold=int(
                 steps_per_epoch * config.resample_latents_epochs
             ),
+            sign_aware=config.sign_aware,
+            reset_activation_offsets_on_resample=config.reset_activation_offsets_on_resample,
             device=device,
         )
     raise ValueError(f"Unknown SAE class: {config.sae_class}")
