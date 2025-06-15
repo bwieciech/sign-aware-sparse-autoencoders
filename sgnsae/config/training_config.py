@@ -21,4 +21,5 @@ class TrainingConfig:
     early_stopping_patience: Optional[int] = None
     early_stopping_min_delta: Optional[float] = None
     reset_activation_offsets_on_resample: Optional[bool] = None
+    single_activation_offset: Optional[bool] = None
     wandb_project: Optional[str] = None

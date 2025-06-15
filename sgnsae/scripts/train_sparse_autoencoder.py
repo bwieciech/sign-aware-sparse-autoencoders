@@ -66,6 +66,7 @@ def instantiate_model(
             ),
             sign_aware=config.sign_aware,
             reset_activation_offsets_on_resample=config.reset_activation_offsets_on_resample,
+            single_activation_offset=config.single_activation_offset,
             device=device,
         )
     if config.sae_class == GatedSAE.__name__:
@@ -78,6 +79,7 @@ def instantiate_model(
             ),
             sign_aware=config.sign_aware,
             reset_activation_offsets_on_resample=config.reset_activation_offsets_on_resample,
+            single_activation_offset=config.single_activation_offset,
             device=device,
         )
     raise ValueError(f"Unknown SAE class: {config.sae_class}")

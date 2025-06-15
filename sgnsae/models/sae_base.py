@@ -15,6 +15,7 @@ class SAEBase(abc.ABC, torch.nn.Module):
         device: str,
         sign_aware: bool = False,
         reset_activation_offsets_on_resample: Optional[bool] = None,
+        single_activation_offset: Optional[bool] = None,
     ):
         super().__init__()
 
@@ -28,15 +29,27 @@ class SAEBase(abc.ABC, torch.nn.Module):
         if sign_aware:
             if reset_activation_offsets_on_resample is None:
                 raise ValueError(
-                    "reset_activation_offsets_on_resample must be specified when sign_aware is 'true"
-                    ""
+                    "reset_activation_offsets_on_resample must be specified when sign_aware is 'true'"
                 )
-            self.act_offset = torch.nn.Parameter(
-                1e-3 * torch.ones(n_instances, d_hidden, device=device)
-            )
+            if single_activation_offset is None:
+                raise ValueError(
+                    "single_activation_offset must be specified when sign_aware is 'true'"
+                )
+            if single_activation_offset:
+                self.act_offset = torch.nn.Parameter(
+                    1e-3 * torch.ones(n_instances, d_hidden, device=device)
+                )
+            else:
+                self.act_offset_left = torch.nn.Parameter(
+                    1e-3 * torch.ones(n_instances, d_hidden, device=device)
+                )
+                self.act_offset_right = torch.nn.Parameter(
+                    1e-3 * torch.ones(n_instances, d_hidden, device=device)
+                )
             self.reset_activation_offsets_on_resample = (
                 reset_activation_offsets_on_resample
             )
+            self.single_activation_offset = single_activation_offset
 
         self.W_enc = torch.nn.Parameter(
             torch.nn.init.kaiming_uniform_(
@@ -82,8 +95,16 @@ class SAEBase(abc.ABC, torch.nn.Module):
         self.W_dec.transpose(-1, -2).data[resample_latents_mask] = new_weights
 
         if self.sign_aware and self.reset_activation_offsets_on_resample:
-            self.act_offset.data[resample_latents_mask] = 1e-3 * torch.ones(
-                resample_latents_count, device=self.device
-            )
+            if self.single_activation_offset:
+                self.act_offset.data[resample_latents_mask] = 1e-3 * torch.ones(
+                    resample_latents_count, device=self.device
+                )
+            else:
+                self.act_offset_left.data[resample_latents_mask] = 1e-3 * torch.ones(
+                    resample_latents_count, device=self.device
+                )
+                self.act_offset_right.data[resample_latents_mask] = 1e-3 * torch.ones(
+                    resample_latents_count, device=self.device
+                )
 
         return resample_latents_mask

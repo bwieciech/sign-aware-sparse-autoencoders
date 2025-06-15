@@ -24,6 +24,7 @@ class TestSAEModels(unittest.TestCase):
             resample_latents_threshold=self.resample_latents_threshold,
             sign_aware=True,
             reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
             device=self.device,
         )
 
@@ -60,6 +61,7 @@ class TestSAEModels(unittest.TestCase):
             resample_latents_threshold=self.resample_latents_threshold,
             sign_aware=True,
             reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
             device=self.device,
         )
 
@@ -96,6 +98,7 @@ class TestSAEModels(unittest.TestCase):
             resample_latents_threshold=self.resample_latents_threshold,
             sign_aware=True,
             reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
             device=self.device,
         )
 
@@ -145,6 +148,7 @@ class TestSAEModels(unittest.TestCase):
             resample_latents_threshold=self.resample_latents_threshold,
             sign_aware=True,
             reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
             device=self.device,
         )
 
@@ -213,6 +217,7 @@ class TestSAEModels(unittest.TestCase):
             resample_latents_threshold=self.resample_latents_threshold,
             sign_aware=True,
             reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
             device=self.device,
         )
 
@@ -252,6 +257,7 @@ class TestSAEModels(unittest.TestCase):
             resample_latents_threshold=self.resample_latents_threshold,
             sign_aware=True,
             reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
             device=self.device,
         )
 
@@ -279,6 +285,201 @@ class TestSAEModels(unittest.TestCase):
         # then
         has_negative_vanilla = (output_vanilla["latents"] < 0).any()
         self.assertFalse(has_negative_vanilla)
+
+
+    def test_sae_single_activation_offset_creates_correct_parameters(self):
+        # given
+        model = SAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
+            device=self.device,
+        )
+
+        # when & then
+        self.assertTrue(hasattr(model, "act_offset"))
+        self.assertFalse(hasattr(model, "act_offset_left"))
+        self.assertFalse(hasattr(model, "act_offset_right"))
+        self.assertEqual(model.act_offset.shape, (self.n_instances, self.d_hidden))
+
+    def test_sae_dual_activation_offset_creates_correct_parameters(self):
+        # given
+        model = SAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=False,
+            device=self.device,
+        )
+
+        # when & then
+        self.assertFalse(hasattr(model, "act_offset"))
+        self.assertTrue(hasattr(model, "act_offset_left"))
+        self.assertTrue(hasattr(model, "act_offset_right"))
+        self.assertEqual(model.act_offset_left.shape, (self.n_instances, self.d_hidden))
+        self.assertEqual(model.act_offset_right.shape, (self.n_instances, self.d_hidden))
+
+    def test_gated_sae_single_activation_offset_creates_correct_parameters(self):
+        # given
+        model = GatedSAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
+            device=self.device,
+        )
+
+        # when & then
+        self.assertTrue(hasattr(model, "act_offset"))
+        self.assertFalse(hasattr(model, "act_offset_left"))
+        self.assertFalse(hasattr(model, "act_offset_right"))
+        self.assertEqual(model.act_offset.shape, (self.n_instances, self.d_hidden))
+
+    def test_gated_sae_dual_activation_offset_creates_correct_parameters(self):
+        # given
+        model = GatedSAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=False,
+            device=self.device,
+        )
+
+        # when & then
+        self.assertFalse(hasattr(model, "act_offset"))
+        self.assertTrue(hasattr(model, "act_offset_left"))
+        self.assertTrue(hasattr(model, "act_offset_right"))
+        self.assertEqual(model.act_offset_left.shape, (self.n_instances, self.d_hidden))
+        self.assertEqual(model.act_offset_right.shape, (self.n_instances, self.d_hidden))
+
+    def test_sae_single_vs_dual_offset_produces_different_latents(self):
+        # given
+        torch.manual_seed(42)
+        input_data = torch.randn(self.batch_size, self.d_in) * 2
+        
+        model_single = SAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
+            device=self.device,
+        )
+        
+        model_dual = SAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=False,
+            device=self.device,
+        )
+        
+        with torch.no_grad():
+            model_dual.W_enc.data = model_single.W_enc.data.clone()
+            model_dual.b_enc.data = model_single.b_enc.data.clone()
+            model_dual.W_dec.data = model_single.W_dec.data.clone()
+            model_dual.b_dec.data = model_single.b_dec.data.clone()
+            
+            model_dual.act_offset_left.data.fill_(0.1)
+            model_dual.act_offset_right.data.fill_(2.0)
+            model_single.act_offset.data.fill_(1.0)
+
+        # when
+        output_single = model_single(input_data)
+        output_dual = model_dual(input_data)
+
+        # then
+        self.assertFalse(torch.allclose(output_single["latents"], output_dual["latents"]))
+
+    def test_gated_sae_single_vs_dual_offset_produces_different_latents(self):
+        # given
+        torch.manual_seed(42)
+        input_data = torch.randn(self.batch_size, self.d_in) * 2
+        
+        model_single = GatedSAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=True,
+            device=self.device,
+        )
+        
+        model_dual = GatedSAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=False,
+            device=self.device,
+        )
+        
+        with torch.no_grad():
+            model_dual.W_enc.data = model_single.W_enc.data.clone()
+            model_dual.b_enc.data = model_single.b_enc.data.clone()
+            model_dual.W_dec.data = model_single.W_dec.data.clone()
+            model_dual.b_dec.data = model_single.b_dec.data.clone()
+            model_dual.r_mag.data = model_single.r_mag.data.clone()
+            model_dual.b_mag.data = model_single.b_mag.data.clone()
+            
+            model_dual.act_offset_left.data.fill_(0.1)
+            model_dual.act_offset_right.data.fill_(2.0)
+            model_single.act_offset.data.fill_(1.0)
+
+        # when
+        output_single = model_single(input_data)
+        output_dual = model_dual(input_data)
+
+        # then
+        self.assertFalse(torch.allclose(output_single["latents"], output_dual["latents"]))
+
+    def test_sae_dual_offset_handles_negative_parameters_correctly(self):
+        # given
+        model = SAE(
+            n_instances=self.n_instances,
+            d_in=self.d_in,
+            d_hidden=self.d_hidden,
+            resample_latents_threshold=self.resample_latents_threshold,
+            sign_aware=True,
+            reset_activation_offsets_on_resample=True,
+            single_activation_offset=False,
+            device=self.device,
+        )
+        
+        with torch.no_grad():
+            model.act_offset_left.data.fill_(-1.0)
+            model.act_offset_right.data.fill_(-2.0)
+        
+        input_data = torch.randn(self.batch_size, self.d_in)
+
+        # when
+        output = model(input_data)
+
+        # then
+        self.assertEqual(output["latents"].shape, (self.n_instances, self.batch_size, self.d_hidden))
+        self.assertEqual(output["y_pred"].shape, (self.n_instances, self.batch_size, self.d_in))
 
 
 if __name__ == "__main__":

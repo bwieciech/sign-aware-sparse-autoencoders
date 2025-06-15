@@ -16,6 +16,7 @@ class GatedSAE(SAEBase):
         resample_latents_threshold: int,
         sign_aware: bool,
         reset_activation_offsets_on_resample: Optional[bool] = None,
+        single_activation_offset: Optional[bool] = None,
         device: str = "cpu",
     ):
         super().__init__(
@@ -26,6 +27,7 @@ class GatedSAE(SAEBase):
             device,
             sign_aware=sign_aware,
             reset_activation_offsets_on_resample=reset_activation_offsets_on_resample,
+            single_activation_offset=single_activation_offset,
         )
         self.r_mag = torch.nn.Parameter(
             torch.zeros(n_instances, d_hidden, device=device)
@@ -64,9 +66,23 @@ class GatedSAE(SAEBase):
         )
         if self.sign_aware:
             f_gate = torch.where(
-                pi_gate > self.act_offset,
-                1,
-                torch.where(pi_gate < -self.act_offset, -1, 0),
+                pi_gate
+                > torch.relu(
+                    self.act_offset
+                    if self.single_activation_offset
+                    else self.act_offset_right
+                ),
+                1.0,
+                torch.where(
+                    pi_gate
+                    < -torch.relu(
+                        self.act_offset
+                        if self.single_activation_offset
+                        else self.act_offset_left
+                    ),
+                    -1.0,
+                    0.0,
+                ),
             ).float()
         else:
             f_gate = (pi_gate > 0).float()

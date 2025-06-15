@@ -34,6 +34,7 @@ def parse_arguements() -> Namespace:
     parser.add_argument("--early-stopping-min-delta", type=float, default=None)
     parser.add_argument("--sign-aware", type=int, required=True)
     parser.add_argument("--reset-activation-offsets-on-resample", type=int, default=1)
+    parser.add_argument("--single-activation-offset", type=int, default=0)
     parser.add_argument("--wandb-project", type=str, default=None)
     parser.add_argument(
         "--wandb-key",
@@ -65,6 +66,9 @@ if __name__ == "__main__":
         reset_activation_offsets_on_resample=bool(
             args.reset_activation_offsets_on_resample
         )
+        if bool(args.sign_aware)
+        else None,
+        single_activation_offset=bool(args.single_activation_offset)
         if bool(args.sign_aware)
         else None,
         wandb_project=args.wandb_project,

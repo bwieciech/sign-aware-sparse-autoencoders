@@ -16,6 +16,7 @@ class SAE(SAEBase):
         resample_latents_threshold: int,
         sign_aware: bool,
         reset_activation_offsets_on_resample: Optional[bool] = None,
+        single_activation_offset: Optional[bool] = None,
         device: str = "cpu",
     ):
         super().__init__(
@@ -26,6 +27,7 @@ class SAE(SAEBase):
             device,
             sign_aware=sign_aware,
             reset_activation_offsets_on_resample=reset_activation_offsets_on_resample,
+            single_activation_offset=single_activation_offset,
         )
 
     def forward(self, x: Tensor) -> Dict[str, Tensor]:
@@ -45,9 +47,20 @@ class SAE(SAEBase):
         )
 
         if self.sign_aware:
-            latents = (x.abs() > self.act_offset) * torch.where(
-                x > 0, x - self.act_offset, x + self.act_offset
-            )
+            if self.single_activation_offset:
+                latents = (x.abs() > self.act_offset) * torch.where(
+                    x > 0, x - self.act_offset, x + self.act_offset
+                )
+            else:
+                latents = torch.where(
+                    x > torch.relu(self.act_offset_right),
+                    x - self.act_offset_right,
+                    torch.where(
+                        x < -torch.relu(self.act_offset_left),
+                        x + self.act_offset_left,
+                        0.0,
+                    ),
+                )
         else:
             latents = torch.relu(x)
 

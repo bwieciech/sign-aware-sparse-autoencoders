@@ -15,5 +15,6 @@
   "resample_latents_epochs": 1.0,
   "early_stopping_patience": null,
   "early_stopping_min_delta": null,
-  "reset_activation_offsets_on_resample": null
+  "reset_activation_offsets_on_resample": null,
+  "single_activation_offset": null
 }
