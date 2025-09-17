@@ -134,6 +134,12 @@ def train_model(
 
         optimizer.step()
 
+        with torch.no_grad():
+            if hasattr(model, "W_dec"):
+                model.W_dec.data = model.W_dec.data / (
+                    model.W_dec.data.norm(dim=1, keepdim=True) + 1e-8
+                )
+
         latents = outputs["latents"].detach()
         l0 = _compute_l0(latents, config.latent_activity_epsilon)
 

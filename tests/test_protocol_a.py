@@ -102,6 +102,14 @@ class TestProtocolAInfrastructure(unittest.TestCase):
         result = train_model(model, dataset, train_cfg)
         self.assertEqual(result.inactivity_counters.shape, (1, 4))
         self.assertGreaterEqual(len(result.history), 1)
+        decoder_norms = model.W_dec.detach().norm(dim=1)
+        self.assertTrue(
+            torch.allclose(
+                decoder_norms,
+                torch.ones_like(decoder_norms),
+                atol=1e-5,
+            )
+        )
 
     def test_collapse_detection_identifies_signed_latent(self):
         features = torch.tensor([[1.0, 0.0], [-1.0, 0.0]], dtype=torch.float32)
@@ -143,6 +151,51 @@ class TestProtocolAInfrastructure(unittest.TestCase):
         dataset = data.to_dataset()
         latents = torch.tensor([[1.0], [-1.0]], dtype=torch.float32)
         decoder = torch.tensor([[1.0], [0.0]], dtype=torch.float32)
+        model = DummyModel(latents, decoder)
+        evaluation = evaluate_toy2d_model(model, "dummy", dataset, data)
+        self.assertAlmostEqual(evaluation.collapse_rate, 1.0)
+        self.assertEqual(evaluation.collapsed_pairs, [(0, 1)])
+
+    def test_collapse_detection_handles_flipped_orientation(self):
+        features = torch.tensor([[1.0, 0.0], [-1.0, 0.0]], dtype=torch.float32)
+        activations = torch.tensor(
+            [
+                [0.8, 0.0],
+                [0.0, 0.9],
+            ],
+            dtype=torch.float32,
+        )
+        observations = activations @ features
+        bundle = Toy2DBundle(
+            name="anti_0",
+            indices=(0, 1),
+            bundle_type=BUNDLE_TYPE_ANTICORRELATED,
+            base_angle=0.0,
+        )
+        config = Toy2DGenerationConfig(
+            num_samples=2,
+            num_correlated_bundles=0,
+            correlated_bundle_size=0,
+            num_anticorrelated_bundles=1,
+            anticorrelated_bundle_size=2,
+            correlated_on_probability=0.0,
+            anticorrelated_on_probability=1.0,
+            angular_std=0.0,
+            magnitude_range=(0.0, 1.0),
+            noise_std=0.0,
+            seed=0,
+        )
+        data = Toy2DData(
+            observations=observations,
+            activations=activations,
+            features=features,
+            bundles=[bundle],
+            config=config,
+            feature_to_bundle=[0, 0],
+        )
+        dataset = data.to_dataset()
+        latents = torch.tensor([[-1.0], [1.0]], dtype=torch.float32)
+        decoder = torch.tensor([[-1.0], [0.0]], dtype=torch.float32)
         model = DummyModel(latents, decoder)
         evaluation = evaluate_toy2d_model(model, "dummy", dataset, data)
         self.assertAlmostEqual(evaluation.collapse_rate, 1.0)

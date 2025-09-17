@@ -101,14 +101,37 @@ def _detect_collapsed_pairs(
         if a_mask.sum() == 0 or b_mask.sum() == 0:
             continue
         for latent_idx, decoder_vec in enumerate(decoder_vectors):
+            # Orientation 1: decoder aligns with feature A; negative aligns with feature B.
             angle_a = angle_between(decoder_vec, feature_a)
             angle_b = angle_between(-decoder_vec, feature_b)
-            if angle_a > angle_threshold or angle_b > angle_threshold:
+            orientation1_ok = angle_a <= angle_threshold and angle_b <= angle_threshold
+
+            # Orientation 2: decoder aligns with feature B; negative aligns with feature A.
+            angle_a_flip = angle_between(decoder_vec, feature_b)
+            angle_b_flip = angle_between(-decoder_vec, feature_a)
+            orientation2_ok = angle_a_flip <= angle_threshold and angle_b_flip <= angle_threshold
+
+            if not (orientation1_ok or orientation2_ok):
                 continue
+
             latent_values = latents[:, latent_idx]
-            pos_rate = (latent_values[a_mask] > 0).float().mean().item()
-            neg_rate = (latent_values[b_mask] < 0).float().mean().item()
-            if pos_rate >= sign_threshold and neg_rate >= sign_threshold:
+            pos_rate_a = (latent_values[a_mask] > 0).float().mean().item()
+            neg_rate_b = (latent_values[b_mask] < 0).float().mean().item()
+            orientation1_sign = (
+                orientation1_ok
+                and pos_rate_a >= sign_threshold
+                and neg_rate_b >= sign_threshold
+            )
+
+            pos_rate_b = (latent_values[b_mask] > 0).float().mean().item()
+            neg_rate_a = (latent_values[a_mask] < 0).float().mean().item()
+            orientation2_sign = (
+                orientation2_ok
+                and pos_rate_b >= sign_threshold
+                and neg_rate_a >= sign_threshold
+            )
+
+            if orientation1_sign or orientation2_sign:
                 collapsed.append(pair)
                 break
     return len(collapsed), collapsed
