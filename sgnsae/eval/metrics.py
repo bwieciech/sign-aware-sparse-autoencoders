@@ -56,10 +56,43 @@ def canonicalize_2d_vectors(vectors: torch.Tensor) -> torch.Tensor:
     return rotated
 
 
+# --- Alignment metrics ---------------------------------------------------------
+
+
+def best_alignment_angles_deg(
+    decoder_vectors: torch.Tensor,
+    feature_vectors: torch.Tensor,
+) -> torch.Tensor:
+    """Compute per-feature minimal decoder angles in degrees (sign-invariant).
+
+    Args:
+        decoder_vectors: ``(n_latents, 2)`` decoder directions.
+        feature_vectors: ``(n_features, 2)`` ground-truth feature directions.
+
+    Returns:
+        Tensor of shape ``(n_features,)`` with the best angles in degrees.
+    """
+
+    if decoder_vectors.ndim != 2 or decoder_vectors.shape[1] != 2:
+        raise ValueError("decoder_vectors must have shape (n_latents, 2)")
+    if feature_vectors.ndim != 2 or feature_vectors.shape[1] != 2:
+        raise ValueError("feature_vectors must have shape (n_features, 2)")
+
+    dec = torch.nn.functional.normalize(decoder_vectors, dim=1)
+    feats = torch.nn.functional.normalize(feature_vectors, dim=1)
+
+    cos = feats @ dec.t()
+    abs_cos = cos.abs().clamp(-1.0, 1.0)
+    best_abs_cos, _ = abs_cos.max(dim=1)
+    angles_rad = torch.arccos(best_abs_cos)
+    return torch.rad2deg(angles_rad)
+
+
 __all__ = [
     "angle_between",
     "canonicalize_2d_vectors",
     "degrees",
     "l0_from_latents",
     "mean_squared_error",
+    "best_alignment_angles_deg",
 ]

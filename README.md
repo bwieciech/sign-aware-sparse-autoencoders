@@ -34,15 +34,27 @@ python -m sgnsae.scripts.run_protocol_A --config path/to/optional_config.json
 Running without a configuration file executes the default experimental
 settings described in the design document.  The script emits:
 
-* `metrics/protocol_a_summary.csv` – headline MSE, sparsity (L0) and collapse
-  rates for each model.
+* `metrics/protocol_a_summary.csv` – headline MSE, sparsity (L0), collapse
+  rates, and decoder/feature alignment summaries for each model.
 * `metrics/<model>.json` – detailed decoder/feature angle matrices, sign
-  usage statistics, and the list of anti-correlated feature pairs captured by
-  a single signed latent.
+  usage statistics, per-feature best-alignment angles, and the list of
+  anti-correlated feature pairs captured by a single signed latent.
 * `figures/<model>.png` – unit-circle visualisations coloured by ground-truth
   bundles with +/− overlays describing sign usage.
 * `history/<model>.json` – per-step training logs containing the reconstruction,
   sparsity, and auxiliary losses.
+
+#### Expected outputs (per model)
+
+Each model's JSON metrics now expose:
+
+* `alignment_angles_deg`: the best alignment angle (degrees) to any decoder,
+  up to sign, for every ground-truth feature.
+* `alignment_mean_deg` and `alignment_median_deg`: summary statistics that also
+  appear in `metrics/protocol_a_summary.csv`.
+
+The collapse detector is orientation-invariant and may optionally require
+opposite-signed Pearson correlations when a `corr_threshold` is provided.
 
 ### Configuration schema
 

@@ -8,7 +8,25 @@ from typing import Dict, List, Sequence, Tuple
 import torch
 
 from sgnsae.data.toy2d import Toy2DData, Toy2DTensorDataset
-from sgnsae.eval.metrics import angle_between, l0_from_latents, mean_squared_error
+from sgnsae.eval.metrics import (
+    angle_between,
+    best_alignment_angles_deg,
+    l0_from_latents,
+    mean_squared_error,
+)
+
+
+def _pearson_corr(x: torch.Tensor, y: torch.Tensor) -> float:
+    """Return the Pearson correlation between two 1-D tensors."""
+
+    if x.numel() != y.numel():
+        raise ValueError("x and y must have the same length")
+    xc = x - x.mean()
+    yc = y - y.mean()
+    denom = (xc.norm() * yc.norm()).item()
+    if denom < 1e-12:
+        return 0.0
+    return float((xc * yc).sum().item() / denom)
 
 
 @dataclass
@@ -26,6 +44,9 @@ class Toy2DEvaluation:
     collapse_rate: float
     collapsed_pairs: List[Tuple[int, int]]
     sign_usage: List[DecoderSignUsage]
+    alignment_angles_deg: torch.Tensor
+    alignment_mean_deg: float
+    alignment_median_deg: float
 
 
 def _collect_latents(
@@ -89,24 +110,37 @@ def _detect_collapsed_pairs(
     *,
     angle_threshold_degrees: float = 15.0,
     sign_threshold: float = 0.55,
+    corr_threshold: float | None = None,
 ) -> Tuple[int, List[Tuple[int, int]]]:
+    """Identify anti-correlated feature pairs represented by one latent.
+
+    A latent is credited with collapsing pair ``(i, j)`` if either orientation
+    satisfies both the angular tolerance (``angle_threshold_degrees``) and sign
+    agreement (``sign_threshold``).  When ``corr_threshold`` is provided the
+    latent must additionally exhibit opposite-signed Pearson correlations whose
+    magnitudes exceed the threshold.
+    """
+
     angle_threshold = math.radians(angle_threshold_degrees)
     collapsed: List[Tuple[int, int]] = []
 
+    dec = torch.nn.functional.normalize(decoder_vectors, dim=1)
+    feats = torch.nn.functional.normalize(data.features, dim=1)
+
     for pair in data.anticorrelated_pairs():
-        feature_a = data.features[pair[0]]
-        feature_b = data.features[pair[1]]
-        a_mask = data.activations[:, pair[0]] > 0
-        b_mask = data.activations[:, pair[1]] > 0
+        idx_a, idx_b = pair
+        feature_a = feats[idx_a]
+        feature_b = feats[idx_b]
+        a_mask = data.activations[:, idx_a] > 0
+        b_mask = data.activations[:, idx_b] > 0
         if a_mask.sum() == 0 or b_mask.sum() == 0:
             continue
-        for latent_idx, decoder_vec in enumerate(decoder_vectors):
-            # Orientation 1: decoder aligns with feature A; negative aligns with feature B.
+
+        for latent_idx, decoder_vec in enumerate(dec):
             angle_a = angle_between(decoder_vec, feature_a)
             angle_b = angle_between(-decoder_vec, feature_b)
             orientation1_ok = angle_a <= angle_threshold and angle_b <= angle_threshold
 
-            # Orientation 2: decoder aligns with feature B; negative aligns with feature A.
             angle_a_flip = angle_between(decoder_vec, feature_b)
             angle_b_flip = angle_between(-decoder_vec, feature_a)
             orientation2_ok = angle_a_flip <= angle_threshold and angle_b_flip <= angle_threshold
@@ -131,7 +165,21 @@ def _detect_collapsed_pairs(
                 and neg_rate_a >= sign_threshold
             )
 
-            if orientation1_sign or orientation2_sign:
+            if orientation1_sign:
+                if corr_threshold is not None:
+                    corr_a = _pearson_corr(latent_values, data.activations[:, idx_a])
+                    corr_b = _pearson_corr(latent_values, data.activations[:, idx_b])
+                    if not (corr_a >= corr_threshold and corr_b <= -corr_threshold):
+                        continue
+                collapsed.append(pair)
+                break
+
+            if orientation2_sign:
+                if corr_threshold is not None:
+                    corr_b = _pearson_corr(latent_values, data.activations[:, idx_b])
+                    corr_a = _pearson_corr(latent_values, data.activations[:, idx_a])
+                    if not (corr_b >= corr_threshold and corr_a <= -corr_threshold):
+                        continue
                 collapsed.append(pair)
                 break
     return len(collapsed), collapsed
@@ -168,6 +216,10 @@ def evaluate_toy2d_model(
     if total_pairs > 0:
         collapse_rate = len(collapsed_pairs) / total_pairs
 
+    alignment_angles = best_alignment_angles_deg(decoder_vectors, data.features)
+    alignment_mean = float(alignment_angles.mean().item())
+    alignment_median = float(alignment_angles.median().item())
+
     angles = torch.zeros(data.num_features, decoder_vectors.shape[0])
     for feature_idx in range(data.num_features):
         feature_vec = data.features[feature_idx]
@@ -182,6 +234,9 @@ def evaluate_toy2d_model(
         collapse_rate=collapse_rate,
         collapsed_pairs=collapsed_pairs,
         sign_usage=_sign_usage(latents),
+        alignment_angles_deg=alignment_angles,
+        alignment_mean_deg=alignment_mean,
+        alignment_median_deg=alignment_median,
     )
 
 

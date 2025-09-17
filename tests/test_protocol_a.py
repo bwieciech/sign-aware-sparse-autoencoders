@@ -201,6 +201,46 @@ class TestProtocolAInfrastructure(unittest.TestCase):
         self.assertAlmostEqual(evaluation.collapse_rate, 1.0)
         self.assertEqual(evaluation.collapsed_pairs, [(0, 1)])
 
+    def test_alignment_summary_reports_zero_for_perfect_alignment(self):
+        features = torch.tensor(
+            [
+                [1.0, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=torch.float32,
+        )
+        activations = torch.zeros(4, 2, dtype=torch.float32)
+        observations = activations @ features
+        data = Toy2DData(
+            observations=observations,
+            activations=activations,
+            features=features,
+            bundles=[],
+            config=Toy2DGenerationConfig(
+                num_samples=4,
+                num_correlated_bundles=0,
+                correlated_bundle_size=0,
+                num_anticorrelated_bundles=0,
+                anticorrelated_bundle_size=0,
+                correlated_on_probability=0.0,
+                anticorrelated_on_probability=0.0,
+                angular_std=0.0,
+                magnitude_range=(0.0, 1.0),
+                noise_std=0.0,
+                seed=0,
+            ),
+            feature_to_bundle=[-1, -1],
+        )
+        dataset = data.to_dataset()
+        latents = torch.zeros(4, 2)
+        decoder = features.t()
+        model = DummyModel(latents, decoder)
+
+        evaluation = evaluate_toy2d_model(model, "aligned", dataset, data)
+        self.assertTrue(torch.allclose(evaluation.alignment_angles_deg, torch.zeros(2)))
+        self.assertAlmostEqual(evaluation.alignment_mean_deg, 0.0)
+        self.assertAlmostEqual(evaluation.alignment_median_deg, 0.0)
+
     @unittest.skipUnless(HAS_MATPLOTLIB, "matplotlib is required for this test")
     def test_visualization_returns_figure(self):
         config = Toy2DGenerationConfig(

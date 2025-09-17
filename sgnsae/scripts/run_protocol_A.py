@@ -128,6 +128,9 @@ def _evaluation_to_dict(evaluation: Toy2DEvaluation) -> Dict:
         "collapsed_pairs": evaluation.collapsed_pairs,
         "decoder_angles": evaluation.decoder_angles.tolist(),
         "sign_usage": [asdict(usage) for usage in evaluation.sign_usage],
+        "alignment_angles_deg": evaluation.alignment_angles_deg.tolist(),
+        "alignment_mean_deg": evaluation.alignment_mean_deg,
+        "alignment_median_deg": evaluation.alignment_median_deg,
     }
 
 
@@ -192,6 +195,8 @@ def run_protocol(config: ProtocolAConfig):
                 "mse": evaluation.mse,
                 "l0": evaluation.l0,
                 "collapse_rate": evaluation.collapse_rate,
+                "alignment_mean_deg": evaluation.alignment_mean_deg,
+                "alignment_median_deg": evaluation.alignment_median_deg,
             }
         )
         eval_path = output_dir / "metrics" / f"{model_config.name}.json"
@@ -216,7 +221,14 @@ def run_protocol(config: ProtocolAConfig):
             _save_plot(fig, fig_path)
 
     summary_path = output_dir / "metrics" / "protocol_a_summary.csv"
-    headers = ["model_name", "mse", "l0", "collapse_rate"]
+    headers = [
+        "model_name",
+        "mse",
+        "l0",
+        "collapse_rate",
+        "alignment_mean_deg",
+        "alignment_median_deg",
+    ]
     with summary_path.open("w", encoding="utf-8") as f:
         f.write(",".join(headers) + "\n")
         for row in metrics_rows:
