@@ -4,6 +4,7 @@ from sgnsae.train.train_sae import (
     TrainingConfig,
     TrainingLogEntry,
     TrainingResult,
+    detect_device,
     train_model,
 )
 
@@ -12,5 +13,6 @@ __all__ = [
     "TrainingConfig",
     "TrainingLogEntry",
     "TrainingResult",
+    "detect_device",
     "train_model",
 ]

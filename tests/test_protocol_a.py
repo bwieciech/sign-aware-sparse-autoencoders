@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import torch
 
@@ -13,7 +14,7 @@ from sgnsae.eval import DecoderSignUsage
 from sgnsae.eval.toy2d_eval import evaluate_toy2d_model
 from sgnsae.eval.visualize_toy2d import HAS_MATPLOTLIB, plot_decoder_arrangement
 from sgnsae.models import SAE
-from sgnsae.train import OptimizerConfig, TrainingConfig, train_model
+from sgnsae.train import OptimizerConfig, TrainingConfig, detect_device, train_model
 
 
 class DummyModel(torch.nn.Module):
@@ -110,6 +111,13 @@ class TestProtocolAInfrastructure(unittest.TestCase):
                 atol=1e-5,
             )
         )
+
+    def test_detect_device_prefers_cuda_when_available(self):
+        with mock.patch("torch.cuda.is_available", return_value=True):
+            self.assertEqual(detect_device(None), "cuda")
+
+    def test_detect_device_respects_override(self):
+        self.assertEqual(detect_device("cpu"), "cpu")
 
     def test_collapse_detection_identifies_signed_latent(self):
         features = torch.tensor([[1.0, 0.0], [-1.0, 0.0]], dtype=torch.float32)

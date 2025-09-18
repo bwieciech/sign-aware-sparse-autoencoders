@@ -175,10 +175,28 @@ def train_model(
     )
 
 
+def detect_device(preferred: Optional[str] = None) -> str:
+    """Return the device string to use for training.
+
+    Args:
+        preferred: Optional explicit device string (e.g. ``"cuda:1"``).
+
+    Returns:
+        A device string. If ``preferred`` is provided it is returned directly;
+        otherwise the function chooses ``"cuda"`` when CUDA is available and
+        ``"cpu"`` otherwise.
+    """
+
+    if preferred is not None:
+        return preferred
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 __all__ = [
     "OptimizerConfig",
     "TrainingConfig",
     "TrainingLogEntry",
     "TrainingResult",
+    "detect_device",
     "train_model",
 ]

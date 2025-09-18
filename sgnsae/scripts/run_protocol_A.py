@@ -15,7 +15,12 @@ from sgnsae.data.toy2d import Toy2DGenerationConfig, generate_toy2d_dataset
 from sgnsae.eval.toy2d_eval import Toy2DEvaluation, evaluate_toy2d_model
 from sgnsae.eval.visualize_toy2d import plot_decoder_arrangement
 from sgnsae.models import GatedSAE, SAE
-from sgnsae.train.train_sae import OptimizerConfig, TrainingConfig, train_model
+from sgnsae.train.train_sae import (
+    OptimizerConfig,
+    TrainingConfig,
+    detect_device,
+    train_model,
+)
 
 LOGGER = logging.getLogger("protocol_a")
 
@@ -35,7 +40,7 @@ class ProtocolAModelConfig:
 @dataclass
 class ProtocolAConfig:
     seed: int = 0
-    device: str = "cpu"
+    device: str | None = None
     output_dir: str = "protocol_a_outputs"
     dataset: Toy2DGenerationConfig = field(
         default_factory=lambda: Toy2DGenerationConfig(
@@ -159,6 +164,9 @@ def run_protocol(config: ProtocolAConfig):
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
 
+    device = detect_device(config.device)
+    LOGGER.info("Using device %s", device)
+
     output_dir = pathlib.Path(config.output_dir)
     (output_dir / "figures").mkdir(parents=True, exist_ok=True)
     (output_dir / "metrics").mkdir(parents=True, exist_ok=True)
@@ -172,8 +180,12 @@ def run_protocol(config: ProtocolAConfig):
 
     for model_config in config.models:
         LOGGER.info("Training model %s", model_config.name)
-        model = _instantiate_model(model_config, d_in=dataset.observations.shape[1], device=config.device)
-        model.to(config.device)
+        model = _instantiate_model(
+            model_config,
+            d_in=dataset.observations.shape[1],
+            device=device,
+        )
+        model.to(device)
 
         train_cfg = replace(config.training, optimizer=config.optimizer)
         train_cfg = replace(train_cfg, sparsity_coeff=model_config.sparsity_coeff)
@@ -235,7 +247,9 @@ def run_protocol(config: ProtocolAConfig):
             f.write(",".join(str(row[h]) for h in headers) + "\n")
 
     config_path = output_dir / "config.json"
-    config_path.write_text(json.dumps(asdict(config), indent=2, default=str))
+    config_payload = asdict(config)
+    config_payload["device"] = device
+    config_path.write_text(json.dumps(config_payload, indent=2, default=str))
     LOGGER.info("Protocol A complete. Results stored in %s", output_dir)
 
 
@@ -269,7 +283,7 @@ def load_config(path: pathlib.Path) -> ProtocolAConfig:
     models = [ProtocolAModelConfig(**model_dict) for model_dict in raw.get("models", [])]
     return ProtocolAConfig(
         seed=raw.get("seed", 0),
-        device=raw.get("device", "cpu"),
+        device=raw.get("device"),
         output_dir=raw.get("output_dir", "protocol_a_outputs"),
         dataset=dataset,
         optimizer=optimizer,
