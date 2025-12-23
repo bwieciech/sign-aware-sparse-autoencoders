@@ -1,0 +1,167 @@
+# Implementation Plan
+
+- [ ] 1. Implement experiment configuration and CLI
+  - [ ] 1.1 Implement Protocol A configuration models
+    - Define `PolarityDialDataConfig`, `PolarityDialModelVariantConfig`, and `PolarityDialExperimentConfig` as dataclasses (or equivalent) with the fields described in the design.
+    - Implement JSON (and optionally YAML) load/save helpers so the experiment can be driven by a config file.
+    - Ensure all numeric fields are validated (e.g., probabilities in `[0, 1]`, positive counts) and raise clear `ValueError` messages on invalid input.
+    - _Requirements: 4.1, 4.2, 4.3_
+  - [ ] 1.2 Implement `run_polarity_dial_experiment.py` CLI entrypoint
+    - Add a script under `sgnsae/scripts` that parses a `--config-path` argument, loads the experiment configuration, sets all random seeds, and dispatches to the experiment runner.
+    - Ensure the script logs the loaded configuration and creates the `[output_dir]/polarity_dial/[run_id]/` directory before running any heavy computation.
+    - _Requirements: 4.1, 4.2, 4.3_
+
+- [ ] 2. Implement Protocol A data generation
+  - [ ] 2.1 Implement `generate_polarity_dial_dataset` function
+    - Implement the exact sampling procedure described in the design using PyTorch tensors:
+      - Sample `num_features` feature directions `u_j ~ N(0, I_d)` and normalize each to unit length.
+      - For each split (train, val, test) and each sample, sample:
+        - `active_j ~ Bernoulli(activation_prob)` for each feature.
+        - `s_j ~ Bernoulli(positive_sign_prob)` mapped to `+1` or `-1`.
+        - If `s_j = +1`, sample `m_j ~ LogNormal(mu=lognormal_mu, sigma=lognormal_sigma)`;
+          if `s_j = -1`, sample `m_j ~ Exponential(lambda=exponential_lambda)`.
+      - Form signed coefficients `c_j = s_j * m_j` (with `c_j = 0` when inactive), compute `x_clean = coefficients @ feature_directions`, and add Gaussian noise `N(0, noise_std^2 I_d)` to obtain final inputs.
+    - Return tensors for `x_train`, `x_val`, `x_test`, `feature_directions`, and per-split `coefficients_*` as described in the design.
+    - _Requirements: 1.1, 1.2, 1.3_
+  - [ ] 2.2 Implement data summary export
+    - Implement helpers that write `generator_config.json`, `feature_directions.pt`, `coefficients_stats.json`, and `sampled_data.pt` into the run’s `data/` directory.
+    - Compute per-feature statistics of coefficients by sign (mean, std, min, max) and overall sparsity, and serialize them into `coefficients_stats.json`.
+    - _Requirements: 1.4, 5.1_
+
+- [ ] 3. Implement training orchestration for model variants
+  - [ ] 3.1 Implement `run_training_for_variant` helper
+    - Wrap synthetic data into `TensorDataset`/`DataLoader` objects using `PolarityDialModelVariantConfig` batch size.
+    - Instantiate the appropriate SAE variant (`SAE` or `GatedSAE`) based on `sae_class` and `sign_aware`, with `n_instances=1` and `d_hidden` taken from the model config.
+    - Construct an Adam optimizer with the configured learning rate and betas, and reuse the loss computation (`calculate_losses`) from the model classes.
+    - Use a simple training loop over epochs and batches on the training split; track per-epoch total, reconstruction, and sparsity losses.
+    - _Requirements: 2.1, 2.2_
+  - [ ] 3.2 Implement training metrics persistence
+    - After training each model, write `model.pt`, `model_config.json`, and `training_metrics.json` into `models/[model_name]/`.
+    - Ensure `training_metrics.json` contains epoch-wise lists for total loss, reconstruction loss, and sparsity loss, plus an optional `terminated_early` flag.
+    - _Requirements: 2.4, 5.1_
+  - [ ] 3.3 Implement structured stdout/stderr logging during training
+    - Add logging of key training information to stdout or stderr at configurable intervals (e.g., every few steps and at the end of each epoch), including current epoch, batch index, losses (total, reconstruction, sparsity), and mean active latents where available.
+    - Ensure logs clearly indicate the model variant name and seed, and that progress messages are flushed so they appear in real time when running long experiments.
+    - Optionally provide a quiet/verbose flag in the experiment config to control logging frequency without changing code.
+    - _Requirements: 2.2, 4.2, 5.1_
+
+- [ ] 4. Implement evaluation: alignment and split-scale calibration
+  - [ ] 4.1 Implement decoder–feature alignment
+    - Extract decoder directions from the trained model (`W_dec` normalized along the feature dimension) and arrange them as columns `D[:, i]`.
+    - Compute cosine similarities between decoder columns and ground-truth feature directions; use the Hungarian algorithm (e.g., `scipy.optimize.linear_sum_assignment`) to compute a maximum-total-similarity matching.
+    - Serialize the alignment mapping and cosine scores into `alignment.json` under `models/[model_name]/`.
+    - _Requirements: 3.1_
+  - [ ] 4.2 Implement coefficient extraction and gamma computation
+    - For each matched pair `(latent_index, feature_index)`:
+      - Extract model latent activations and decoder columns to compute per-sample predicted coefficients `hat_c_i(x)` along the matched direction.
+      - Use the ground-truth coefficients `c_j(x)` from the dataset tensors to split samples into positive (`c_j > 0`) and negative (`c_j < 0`) regimes.
+      - Compute \(\gamma_+\) and \(\gamma_-\) using least-squares closed-form expressions with a small epsilon for numerical stability.
+    - Derive `rel_error_plus`, `rel_error_minus`, and summary statistics over all matched pairs; write `calibration.json` with the per-pair list and summary block.
+    - _Requirements: 3.2, 3.3, 3.4, 5.1, 5.2_
+
+- [ ] 5. Implement plotting for Protocol A
+  - [ ] 5.1 Implement calibration scatter and gamma histograms
+    - Using `matplotlib`, implement per-model plots:
+      - `calibration_scatter_[model_name].png` with:
+        - x-axis = predicted coefficient `hat_c_i(x)`, y-axis = ground-truth coefficient `c_j(x)`.
+        - Blue (`#1f77b4`) circles for `c_j > 0`, red (`#d62728`) crosses for `c_j < 0`, alpha ~ 0.4, and a dark-gray (`#555555`) y=x line.
+      - `gamma_hist_[model_name].png` with:
+        - Top subplot: histogram of \(\gamma_+\) (blue bars, alpha ~ 0.7) with a dashed vertical line at 1.0.
+        - Bottom subplot: histogram of \(\gamma_-\) (red bars, alpha ~ 0.7) with a dashed vertical line at 1.0.
+    - Save plots into `models/[model_name]/plots/` using `bbox_inches="tight"` to avoid clipped labels.
+    - _Requirements: 3.4, 5.1_
+  - [ ] 5.2 Implement gamma difference and training curve plots
+    - Implement `gamma_plus_minus_strip_[model_name].png` with per-pair \(\gamma_+\) (blue) and \(\gamma_-\) (red) dots connected by gray lines to show asymmetry per latent.
+    - Implement `training_loss_[model_name].png` with epoch on the x-axis and total/reconstruction loss curves in distinct colors (e.g., dark blue and orange).
+    - Implement `gamma_diff_bar_comparison.png` at the run root, comparing mean `rel_error_plus` (blue) and `rel_error_minus` (red) across all models with error bars (std or stderr).
+    - _Requirements: 5.1, 5.2_
+
+- [ ] 6. Implement metrics reporting and cross-model comparison
+  - [ ] 6.1 Implement comparison summary aggregation
+    - After all model variants are trained and evaluated, load each model’s `calibration.json` summary and assemble a `comparison_summary.json` at the run root.
+    - Include per-model summary metrics (mean gamma, mean relative errors, standard deviations) and optionally differences relative to a designated baseline (e.g., ReLU SAE).
+    - _Requirements: 5.1, 5.2_
+  - [ ] 6.2 Integrate optional Weights & Biases logging
+    - If a wandb project name and key are provided in the experiment config, log key metrics (losses, calibration summaries) for each model as separate runs or groups using the existing wandb utilities.
+    - Ensure that the run config and identifiers make it easy to link on-disk outputs to wandb runs.
+    - _Requirements: 5.3_
+
+- [ ] 7. Implement tests for Protocol A
+  - [ ] 7.1 Implement data generation tests
+    - Write unit tests that:
+      - Verify shapes, device placement, and unit-norm feature directions for generated tensors.
+      - Check that setting the same `seed` produces identical synthetic datasets.
+      - Empirically validate that positive coefficients and negated negative coefficients have statistics consistent with the configured LogNormal and Exponential distributions.
+    - _Requirements: 1.1, 1.2, 1.3_
+  - [ ] 7.2 Implement alignment and calibration tests
+    - Create small synthetic setups where decoder directions equal ground-truth feature directions and latent activations equal ground-truth coefficients; assert that \(\gamma_+\) and \(\gamma_-\) are close to 1.
+    - Test behavior when one regime has too few samples (e.g., fewer than 5 positive or negative points) and confirm that the implementation records `null` gamma values instead of crashing.
+    - _Requirements: 3.1, 3.2, 3.3_
+  - [ ] 7.3 Implement end-to-end smoke tests
+    - Run the CLI with a tiny debug configuration (e.g., very small dataset and few epochs) and assert that all expected JSON and plot files are created and non-empty.
+    - _Requirements: 1.4, 2.2, 2.4, 3.4, 4.1, 4.2, 5.1_
+
+- [ ] 8. Encode exact "paper run" configurations and commands
+  - [ ] 8.1 Define canonical dataset parameters for paper results
+    - Add a default experiment configuration (e.g., `configs/polarity_dial_paper.json`) that uses the following EXACT data parameters for all paper runs:
+      - `seed` values: run three independent seeds `{0, 1, 2}` and average metrics across them.
+      - `num_train = 200000`
+      - `num_val = 20000`
+      - `num_test = 20000`
+      - `input_dim = 512`
+      - `num_features = 128`
+      - `activation_prob = 0.05`
+      - `positive_sign_prob = 0.7`
+      - `lognormal_mu = 0.0`
+      - `lognormal_sigma = 0.5`
+      - `exponential_lambda = 1.5`
+      - `noise_std = 0.1`
+    - Ensure these parameters are documented in the config file and that the CLI can run directly against this configuration without modification.
+    - _Requirements: 1.1, 1.2, 1.3, 4.1, 4.2_
+  - [ ] 8.2 Define canonical model and training parameters for paper results
+    - In the same `polarity_dial_paper.json` configuration, define three model variants with the following EXACT hyperparameters:
+      - Model 1 (ReLU SAE baseline):
+        - `name = "relu_sae"`
+        - `sae_class = "SAE"`
+        - `sign_aware = false`
+        - `single_activation_offset = false`
+        - `reset_activation_offsets_on_resample = false`
+        - `d_hidden = 128`
+        - `sparsity_coeff = 0.001`
+        - `learning_rate = 0.0001`
+        - `num_epochs = 50`
+        - `batch_size = 1024`
+        - `adam_betas = [0.9, 0.999]`
+      - Model 2 (Standard Gated SAE):
+        - `name = "gated_sae"`
+        - `sae_class = "GatedSAE"`
+        - `sign_aware = false`
+        - `single_activation_offset = false`
+        - `reset_activation_offsets_on_resample = false`
+        - `d_hidden = 128`
+        - `sparsity_coeff = 0.001`
+        - `learning_rate = 0.0001`
+        - `num_epochs = 50`
+        - `batch_size = 1024`
+        - `adam_betas = [0.9, 0.999]`
+      - Model 3 (Sign-Aware Gated SAE):
+        - `name = "sign_aware_gated_sae"`
+        - `sae_class = "GatedSAE"`
+        - `sign_aware = true`
+        - `single_activation_offset = false`
+        - `reset_activation_offsets_on_resample = true`
+        - `d_hidden = 128`
+        - `sparsity_coeff = 0.001`
+        - `learning_rate = 0.0001`
+        - `num_epochs = 50`
+        - `batch_size = 1024`
+        - `adam_betas = [0.9, 0.999]`
+    - Set `output_dir` in the experiment config to a path such as `"assets/polarity_dial_paper"` and default `device` to `"cuda"` when available, otherwise `"cpu"`.
+    - _Requirements: 2.1, 2.2, 4.1, 4.2_
+  - [ ] 8.3 Document exact paper run commands
+    - Add documentation (e.g., a short section in the project README or an experiment-specific README) that specifies the exact commands to reproduce paper results, for example:
+      - `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0.json`
+      - `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1.json`
+      - `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2.json`
+    - Clarify that paper metrics are computed by averaging the three runs `{seed=0,1,2}` for each model variant.
+    - _Requirements: 4.1, 4.2, 4.3, 5.1, 5.2_

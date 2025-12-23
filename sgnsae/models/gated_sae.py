@@ -48,14 +48,14 @@ class GatedSAE(SAEBase):
             self.W_enc,
             "n_instances d_hidden, n_instances d_hidden d_in -> n_instances d_hidden d_in",
         )
-        f_mag = torch.relu(
-            einops.einsum(
-                W_mag,
-                x - self.b_dec.unsqueeze(1),
-                "n_instances d_hidden d_in, n_instances batch d_in -> batch n_instances d_hidden",
-            )
-            + self.b_mag
+        magnitude_input = einops.einsum(
+            W_mag,
+            x - self.b_dec.unsqueeze(1),
+            "n_instances d_hidden d_in, n_instances batch d_in -> batch n_instances d_hidden",
         )
+        if self.sign_aware:
+            magnitude_input = magnitude_input.abs()
+        f_mag = torch.relu(magnitude_input + self.b_mag)
         pi_gate = (
             einops.einsum(
                 self.W_enc,
@@ -115,7 +115,10 @@ class GatedSAE(SAEBase):
         self, y_true: Tensor, sparsity_coeffs: Tensor, output: Dict[str, Tensor]
     ) -> Dict[str, Tensor]:
         reconstruction_loss = (output["x_hat"] - y_true).pow(2).mean(dim=(-1, -2))
-        sparsity_loss = torch.relu(output["pi_gate"]).abs().sum(dim=-1).mean(-1)
+        sparsity_source = (
+            output["pi_gate"].abs() if self.sign_aware else torch.relu(output["pi_gate"])
+        )
+        sparsity_loss = sparsity_source.sum(dim=-1).mean(-1)
         aux_loss = (output["x_hat_frozen"] - y_true).pow(2).mean(dim=(-1, -2))
         loss = reconstruction_loss + sparsity_coeffs * sparsity_loss + aux_loss
         return {
