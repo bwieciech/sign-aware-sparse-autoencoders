@@ -76,5 +76,5 @@ class TestPolarityDialSmoke(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(run_dir, "gamma_diff_bar_comparison.png")))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()

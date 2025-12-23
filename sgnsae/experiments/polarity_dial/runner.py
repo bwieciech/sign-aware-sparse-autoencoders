@@ -58,7 +58,9 @@ def _prepare_run_directory(config: PolarityDialExperimentConfig) -> tuple[str, s
 def _persist_run_config(config: PolarityDialExperimentConfig, run_dir: str) -> None:
     config_path = os.path.join(run_dir, "config.json")
     with open(config_path, "w") as f:
-        json.dump(asdict(config), f, indent=2)
+        sanitized_config = asdict(config)
+        sanitized_config["wandb_api_key"] = None
+        json.dump(sanitized_config, f, indent=2)
 
 
 def _maybe_init_wandb(

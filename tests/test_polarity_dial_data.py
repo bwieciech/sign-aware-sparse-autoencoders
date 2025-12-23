@@ -102,5 +102,5 @@ class TestPolarityDialDataGeneration(unittest.TestCase):
         self.assertGreater((-coefficients[negative_mask]).mean().item(), 0.0)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()

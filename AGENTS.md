@@ -81,8 +81,13 @@ If your tests produce artifacts, make sure they are cleaned up after the test ru
 
 Always run tests and make sure they pass after you have finished developing the feature you were working on.
 
-Aim for full test coverage of your code, excluding dataclasses or scripts located under `multilayerai/scripts`. If you
-are unable to achieve this, explain why to the user.
+Aim for at least 95% test coverage of your code, excluding dataclasses or scripts located under `multilayerai/scripts`.
+If you are unable to achieve this, explain why to the user. Use `Coverage.py` for measuring test coverage in Python
+after finishing the implementation of every task. The coverage should be measured for functions, methods and classes
+you have added or modified.
+
+For tests involving arrays or tensors, apart from checking for correct shapes, you should also check whether the calculated
+values are equal to (or almost equal for floating point numbers) the expected results.
 
 If you use an existing piece of code from the codebase, check if it is already covered by tests. If not, add extensive
 tests for it.
@@ -101,6 +106,7 @@ total_price = number_of_apples * price_per_apple  # Calculates the total price o
   - Workarounds/hacks with links to issues/PRs and a short reason; remove them when resolved.
   - Security or performance implications that are not apparent from code alone.
 - Avoid comments that restate the code, duplicate type information, or narrate each line. Remove commented-out code rather than explaining it.
+- Avoid comments that only explain API compatibility wrappers or migration guidance. Prefer clearer names/tests or link to an issue/PR if the comment is truly necessary.
 
 Do not write docstrings. Do not start files with comments describing the file, and do not add module-level docstrings.
 The class names, function names, type hints, and parameter names should tell the whole story.
@@ -138,6 +144,8 @@ eliminate them.
 ## Python
 
 ### Guidelines
+Follow the [PEP 8 Style Guide](https://peps.python.org/pep-0008/).
+
 Always use the virtual environment available in .venv in the project root. If no virtual environment is available, create one using
 `pyenv-virtualenv`, and place it in the project's root. If you are creating a new virtual environment, list the available
 Python versions and ask which one to use.
@@ -218,10 +226,7 @@ To reformat a single file, run:
 ```bash
 black <filename>
 ```
-To reformat all files in the current directory, run:
-```bash
-black .
-```
+Run `black` individually for each file.
 
 ### Coding Style Examples
 Below is an example of Python code written by the user you are helping. Do your best to write code that has a similar "look & feel" to their style.

@@ -1,0 +1,348 @@
+\documentclass{article}
+
+%----------------------------------------------------------------------------------------
+%	PACKAGES AND OTHER DOCUMENT CONFIGURATIONS
+%----------------------------------------------------------------------------------------
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb, amsthm, amsfonts}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{xcolor}
+
+% Page layout
+\geometry{
+	a4paper,
+	total={170mm,257mm},
+	left=20mm,
+	top=20mm,
+}
+
+% Title and Author
+\title{\textbf{Sign-Aware Gated Sparse Autoencoders: \\ Modeling Anticorrelated Features with Bi-Jump-ReLU Activations}}
+\author{
+    \textbf{Bartosz Wieciech}
+}
+\date{\today}
+
+% Custom commands for notation
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\gate}{\pi_{\text{gate}}}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\relu}{\text{ReLU}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Sparse Autoencoders (SAEs) have emerged as a primary tool for extracting interpretable features from Large Language Models. However, standard SAEs enforce non-negativity on latent activations, compelling the model to learn separate features for diametrically opposed concepts (e.g., ``hot'' vs. ``cold''). This duplication wastes dictionary capacity when features are naturally anticorrelated. We propose the \textit{Sign-Aware Gated SAE}, an extension of the Gated SAE framework that enables a single latent to represent signed evidence along a shared direction. We introduce the \textit{Bi-Jump-ReLU} activation function, which parameterizes a learnable dead zone with independent positive and negative magnitudes. Theoretically, we show that our architecture halves the effective dictionary width required for anticorrelated pairs and becomes strictly parameter-efficient even when such pairs constitute well under $1\%$ of the feature set. We propose a suite of experiments to validate that this approach resolves the "anticorrelation efficiency gap" without sacrificing the no-shrinkage benefits of the gated objective.
+\end{abstract}
+
+%----------------------------------------------------------------------------------------
+%	1. INTRODUCTION
+%----------------------------------------------------------------------------------------
+
+\section{Introduction}
+
+Dictionary learning, particularly via Sparse Autoencoders (SAEs), aims to decompose the dense internal activations of neural networks into sparse, interpretable linear combinations of feature directions \cite{cunningham2023sparse, bricken2023towards}. A standard SAE approximates an activation vector $x \in \R^n$ as $\hat{x} = D f(x) + b$, where $f(x)$ is a sparse vector of coefficients.
+
+A pervasive limitation in current SAE architectures is the non-negativity constraint imposed by the ReLU activation function: $f_i(x) \ge 0$. While valid for many unipolar concepts, this constraint is inductive misalignment for features that represent \textit{anticorrelated} opposites along a single linear subspace---such as sentiment (positive/negative), physical state (hot/cold), or control signals (acceleration/braking). To represent such a subspace, a standard SAE must allocate two distinct latent atoms, $d$ and $-d$, which are mutually exclusive in activation but redundant in geometry. This redundancy inflates the dictionary size required to achieve a given reconstruction fidelity.
+
+Building on the recent success of Gated SAEs \cite{rajamanoharan2024gated}, which decouple feature detection from magnitude estimation to resolve standard $\ell_1$ shrinkage, we introduce the \textit{Sign-Aware Gated SAE}. Our contributions are:
+
+\begin{enumerate}
+    \item \textbf{The Bi-Jump-ReLU Activation:} We formalize a signed activation function with a learnable dead zone and asymmetric scaling, allowing a single latent to model "two-sided" evidence.
+    \item \textbf{Theoretical Efficiency Analysis:} We prove that our architecture reduces the dictionary width required to model anticorrelated pairs by a factor of 2, with a net parameter savings whenever such pairs exceed roughly $0.2\%$ of the feature set in a 4096-dimensional layer (and an even smaller fraction at larger widths).
+    \item \textbf{Protocol Design:} We delineate three experimental protocols---including a reproduction of the geometry from \textit{Toy Models of Superposition} \cite{elhage2022toy}---to rigorously benchmark the approach.
+\end{enumerate}
+
+%----------------------------------------------------------------------------------------
+%	2. BACKGROUND
+%----------------------------------------------------------------------------------------
+
+\section{Background}
+
+\subsection{The Gated SAE and Shrinkage}
+Standard SAEs minimize a reconstruction loss combined with an $\ell_1$ penalty on activations:
+\[
+    \mathcal{L} = \|x - \hat{x}\|_2^2 + \lambda \|f(x)\|_1.
+\]
+This objective suffers from \textit{shrinkage}: the $\ell_1$ term encourages the model to underestimate the magnitude of active features to lower the penalty, harming fidelity.
+
+Gated SAEs address this by separating the "gate" (detection) from the "magnitude" (estimation). Let $\mu$ denote a fixed centering vector (e.g., a running mean of $x$). The encoder consists of two paths:
+\begin{align}
+    \pi(x) &= W_{\text{gate}}(x - \mu) + b_{\text{gate}} \\
+    f(x) &= \mathbb{I}(\pi(x) > 0) \odot \text{ReLU}\big(W_{\text{mag}}(x - \mu) + b_{\text{mag}}\big).
+\end{align}
+By applying the $\ell_1$ penalty only to the gate pre-activations $\pi(x)$ and tying the weights (e.g., $W_{\text{mag}} = \mathrm{diag}(\exp r)\, W_{\text{gate}}$ for some per-feature scale vector $r$), Gated SAEs achieve a Pareto improvement in the sparsity-fidelity trade-off.
+
+%----------------------------------------------------------------------------------------
+%	3. METHOD
+%----------------------------------------------------------------------------------------
+
+\section{Method: Sign-Aware Gated SAE}
+
+We generalize the Gated SAE to handle signed activations while preserving the "no-shrinkage" property. Throughout this section, let $D \in \mathbb{R}^{d_{\text{in}} \times H}$ denote the decoder dictionary with columns $D_{:,i}$, and let $\mu \in \mathbb{R}^{d_{\text{in}}}$ be a fixed centering vector. We use a separate decoder bias $b_{\text{dec}} \in \mathbb{R}^{d_{\text{in}}}$, distinct from the centering.
+
+\subsection{The Bi-Jump-ReLU Activation}
+\label{sec:bijumprelu}
+
+We first introduce a shared linear projection for each latent that is geometrically aligned with the decoder:
+
+\begin{equation}
+    t_i(x) = D_{:,i}^\top (x - \mu), \qquad i = 1,\dots,H.
+\end{equation}
+
+The gate pre-activation for latent $i$ is then taken to be an affine transformation of this projection:
+\begin{equation}
+    \pi_i(x) = \alpha_i\, t_i(x) + \beta_i,
+\end{equation}
+where $\alpha_i, \beta_i \in \mathbb{R}$ are trainable per-latent gate parameters. This makes explicit that detection and magnitude estimation share a direction in input space, following the Gated SAE design.
+
+We introduce two independent threshold parameters $\delta_i^+, \delta_i^- > 0$ (defining a learnable dead zone) and two magnitude scaling factors $r_i^+, r_i^- \in \R$. For notational clarity, we define a polarity variable
+\begin{equation}
+    s_i(x) =
+    \begin{cases}
+        +1 & \text{if } \pi_i(x) > \delta_i^+ \\
+        -1 & \text{if } \pi_i(x) < -\delta_i^- \\
+        0 & \text{otherwise.}
+    \end{cases}
+\end{equation}
+
+The signed latent activation $a_i(x)$ is then defined as:
+\begin{equation}
+    \label{eq:bi_jump_relu}
+    a_i(x) = 
+    \begin{cases} 
+        \text{ReLU}\big(e^{r_i^+} t_i(x) + b_{\text{mag}, i}\big) & \text{if } s_i(x) = +1 \\
+        -\text{ReLU}\big(-e^{r_i^-} t_i(x) - b_{\text{mag}, i}\big) & \text{if } s_i(x) = -1 \\
+        0 & \text{if } s_i(x) = 0,
+    \end{cases}
+\end{equation}
+where $b_{\text{mag},i} \in \mathbb{R}$ is a per-latent offset shared between the positive and negative regimes.
+
+\textbf{Interpretation:} This unit acts as a polarity-sensitive filter. It remains strictly zero within the dead zone $[-\delta_i^-, \delta_i^+]$. If evidence exceeds the positive threshold, it activates with scale $e^{r_i^+}$; if evidence exceeds the negative threshold (in the opposite direction), it activates negatively with scale $e^{r_i^-}$. The decoder column $D_{:,i}$ is shared across both regimes. This effectively collapses two opposite-direction neurons into a single logical unit that carries signed evidence along a common axis.
+
+\subsection{Training Objective}
+
+The decoder reconstructs as
+\begin{equation}
+    \hat{x} = D a(x) + b_{\text{dec}},
+\end{equation}
+where $a(x) \in \mathbb{R}^H$ collects the Bi-Jump-ReLU activations from \cref{eq:bi_jump_relu}. To train this structure without shrinkage, we adapt the Gated SAE loss: we place a sparsity-inducing penalty on the gate pre-activations $\pi_i(x)$ and introduce an auxiliary reconstruction task that trains the gate separately from the magnitude parameters.
+
+The total loss per sample is
+\begin{equation}
+    \mathcal{L}(x) = \underbrace{\|x - D a(x) - b_{\text{dec}}\|_2^2}_{\text{Main Reconstruction}} + \lambda \sum_i \Omega_{\text{gate}}(\pi_i(x)) + \mathcal{L}_{\text{aux}}(x),
+\end{equation}
+where $\lambda > 0$ is a sparsity strength.
+
+The sparsity term $\Omega_{\text{gate}}$ is a hinge-like, piecewise-linear penalty applied to the gate pre-activations:
+\begin{equation}
+    \Omega_{\text{gate}}(\pi_i(x)) = \text{ReLU}\big(\pi_i(x) - \delta_i^+\big) + \text{ReLU}\big(-\pi_i(x) - \delta_i^-\big).
+\end{equation}
+This penalty is exactly zero within the dead zone $[-\delta_i^-, \delta_i^+]$ and grows linearly as $\pi_i(x)$ moves further outside it. Intuitively, it encourages inactive gates to remain inside the dead zone and active gates to exceed their thresholds by the minimum amount necessary; combined with the auxiliary loss, this yields sparse signed activations.
+
+To provide direct supervision to the gate, we introduce an auxiliary reconstruction that uses only the gate output, with a fixed unit magnitude per side. Let $D^{\text{frozen}}$ denote a copy of the decoder whose parameters are held fixed when optimizing this term (e.g., updated periodically or via an exponential moving average of $D$). The auxiliary loss is
+\begin{equation}
+    \mathcal{L}_{\text{aux}}(x) = \big\|x - D^{\text{frozen}} \big[ \text{ReLU}(\pi(x) - \delta^+) - \text{ReLU}(-\pi(x) - \delta^-) \big] - b_{\text{dec}}\big\|_2^2,
+\end{equation}
+where $\pi(x)$, $\delta^+$ and $\delta^-$ are applied elementwise across latents.
+
+\textbf{Training dynamics:} The auxiliary reconstruction provides gradients only to the gate-related parameters $(\alpha_i, \beta_i, \delta_i^+, \delta_i^-)$ via $\pi_i(x)$, while $D^{\text{frozen}}$ is not updated through $\mathcal{L}_{\text{aux}}$. The main reconstruction term updates both the decoder $D$ and the magnitude parameters $(r_i^+, r_i^-, b_{\text{mag},i})$ via the signed activations $a_i(x)$. This cleanly separates detection (learned through the auxiliary path and gate penalty) from magnitude estimation (learned through the main reconstruction), mirroring the no-shrinkage argument for Gated SAEs in the non-signed case.
+
+%----------------------------------------------------------------------------------------
+%	4. THEORETICAL ANALYSIS
+%----------------------------------------------------------------------------------------
+
+\section{Theoretical Analysis}
+
+\subsection{Parameter Efficiency \& Width Reduction}
+
+Let $H$ be the width of a baseline SAE, and suppose that a fraction $p \in [0, 1]$ of the ground-truth features in the data representation appear as perfectly anticorrelated pairs aligned to directions $\pm d$. If there are $N$ total ground-truth features, then $pN$ of them participate in pairs, yielding $(pN)/2$ pairs and $(1-p)N$ unpaired features. A baseline SAE requires two latents for each pair, so it uses $H = N$ latents in total.
+
+In contrast, our Sign-Aware model requires only one latent per anticorrelated pair, plus one latent for each unpaired feature. The effective width required for the Sign-Aware model is therefore
+\begin{equation}
+    H_{\pm} = (1-p)N + \frac{pN}{2} = N \left( 1 - \frac{p}{2} \right) = H \left( 1 - \frac{p}{2} \right).
+\end{equation}
+If $p=1$ (all features are paired), the dictionary size halves.
+
+We now analyze the parameter overhead. Let $d_{\text{in}}$ be the input dimensionality. In a standard Gated SAE, each latent carries roughly $d_{\text{in}}$ parameters for the decoder direction plus $O(1)$ scalar parameters for gate biases and scales; we summarize this as $d_{\text{in}} + c$ parameters per latent for some small constant $c$. The Sign-Aware architecture adds 4 scalars per latent (two thresholds, two magnitude scales) compared to the standard Gated SAE, so per-latent parameters become $d_{\text{in}} + c + 4$.
+
+Approximating the total parameter counts as
+\begin{align}
+    P_{\text{base}} &\approx H (d_{\text{in}} + c), \\
+    P_{\text{sign}} &\approx H_{\pm} (d_{\text{in}} + c + 4) = H \left(1 - \frac{p}{2}\right) (d_{\text{in}} + c + 4),
+\end{align}
+we obtain the condition for net parameter savings:
+\begin{align}
+    P_{\text{sign}} < P_{\text{base}}
+    &\;\Longrightarrow\; \left(1 - \frac{p}{2}\right) (d_{\text{in}} + c + 4) < d_{\text{in}} + c \\
+    &\;\Longrightarrow\; 4 - \frac{p}{2}(d_{\text{in}} + c + 4) < 0 \\
+    &\;\Longrightarrow\; p > \frac{8}{d_{\text{in}} + c + 4}.
+\end{align}
+Taking $c \approx 0$ for simplicity yields the approximate threshold
+\begin{equation}
+    p \gtrsim \frac{8}{d_{\text{in}} + 4}.
+\end{equation}
+For a model dimension $d_{\text{in}} = 4096$, this gives $p \gtrsim 8/4100 \approx 0.2\%$. Thus, under a simple parameter-counting model, the Sign-Aware SAE is strictly parameter-efficient as soon as anticorrelated pairs constitute even a vanishingly small fraction of the feature set (on the order of $10^{-3}$ for typical transformer layer widths).
+
+\subsection{Computational Complexity}
+
+\textbf{Inference.} By caching the projection $t(x) = D^\top (x - \mu)$, the forward pass requires only one matrix multiplication for the encoder, identical in structure to the baseline. The subsequent gating and Bi-Jump-ReLU activations operate elementwise in $H_{\pm}$, just as in the standard Gated SAE. Since $H_{\pm} \le H$, the total inference FLOPs scale down by the factor $\left(1 - \frac{p}{2}\right)$ relative to a baseline with width $H$.
+
+\textbf{Training.} The Gated SAE objective requires an additional decoder pass for the auxiliary loss. In a conventional implementation this roughly adds one extra forward/backward pass through the decoder per optimization step. Relative to a baseline SAE with the same target width, this increases decoder-side compute by a factor on the order of $1.5\times$ (the exact factor depends on how encoder and decoder costs balance), and this factor is further reduced by the width multiplier $\left(1 - \frac{p}{2}\right)$ that we gain from exploiting anticorrelated pairs. In other words, training is modestly more expensive per update than a non-gated SAE with the same width, but yields a permanently smaller and faster dictionary at inference time.
+
+%----------------------------------------------------------------------------------------
+%	5. PROPOSED EXPERIMENTS (EXTENDED)
+%----------------------------------------------------------------------------------------
+
+\section{Proposed Experiments}
+
+We propose a comprehensive evaluation suite designed to isolate the specific contributions of the Sign-Aware Gated SAE: (1) the ability to model asymmetric distributions along a shared axis, (2) the capacity efficiency in anomaly detection tasks, and (3) the geometric consolidation of anticorrelated features.
+
+\subsection{Protocol A: The "Polarity Dial" (Asymmetry \& Calibration)}
+Standard Gated SAEs share a single magnitude parameter ($r$) per feature. If a feature represents an axis with asymmetric semantics (e.g., "Correctness," where \textit{correct} is frequent and bounded, while \textit{incorrect} is rare but heavy-tailed), a single scalar cannot simultaneously calibrate both sides. This experiment tests whether the decoupled $(r^+, r^-)$ and $(\delta^+, \delta^-)$ parameters in the Bi-Jump-ReLU are necessary to capture such asymmetry.
+
+\paragraph{Data Generation.}
+We construct a synthetic dataset $X \in \R^{N \times d}$ consisting of features aligned to random directions $u_j \in \R^d$. Each feature $f_j$ is active with probability $\rho$. If active, its sign $s_j \in \{-1, +1\}$ is determined by a Bernoulli parameter $p_+$. The magnitude follows distinct distributions conditioned on the sign:
+\begin{align}
+    m_j \mid (s_j=+1) &\sim \text{LogNormal}(\mu=0, \sigma=0.5), \\
+    m_j \mid (s_j=-1) &\sim \text{Exponential}(\lambda=1.5).
+\end{align}
+The input is
+\begin{equation}
+    x = \sum_j s_j m_j u_j + \epsilon,
+\end{equation}
+with small isotropic noise $\epsilon$.
+
+\paragraph{Baselines.}
+\begin{itemize}
+    \item \textbf{Standard Gated SAE:} Uses a tied encoder $W_{\text{mag}} \propto W_{\text{gate}}$ with a single scaling factor $r_j$ per latent and non-negative activations.
+    \item \textbf{Baseline ReLU SAE:} Standard architecture with a single non-negative activation per feature.
+\end{itemize}
+
+\paragraph{Latent--Feature Alignment.}
+To compare learned latents to ground-truth features, we align them by maximizing cosine similarity between decoder columns and feature directions. Concretely, we compute the matrix of cosines $\cos(D_{:,i}, u_j)$, and obtain a one-to-one matching between latents $i$ and features $j$ via the Hungarian algorithm, ensuring each latent is assigned to at most one ground-truth axis.
+
+\paragraph{Metrics.}
+We focus on \textit{Split-Scale Calibration}. For each matched pair $(i,j)$, let
+\begin{equation}
+    c_j(x) = s_j m_j
+\end{equation}
+denote the ground-truth scalar coefficient along $u_j$ in the generative model, and let $\hat{c}_i(x)$ denote the model's scalar estimate for that axis, obtained by projecting the reconstruction from latent $i$ onto $u_j$:
+\begin{equation}
+    \hat{c}_i(x) = u_j^\top \big( a_i(x) D_{:,i} \big).
+\end{equation}
+We then compute separate least-squares rescaling factors for the positive and negative halves of the data:
+\begin{align}
+    \gamma_+ &= \arg\min_{\alpha} \E\big[(\alpha \hat{c}_i(x) - c_j(x))^2 \,\big|\, c_j(x) > 0\big], \\
+    \gamma_- &= \arg\min_{\alpha} \E\big[(\alpha \hat{c}_i(x) - c_j(x))^2 \,\big|\, c_j(x) < 0\big].
+\end{align}
+\begin{itemize}
+    \item \textbf{Ideal Outcome:} $\gamma_+ \approx 1$ and $\gamma_- \approx 1$.
+    \item \textbf{Hypothesis:} The Standard Gated SAE, with a single scalar $r_j$, will learn a compromise that under-reconstructs the heavy tail ($\gamma_+ > 1$) and over-reconstructs the light tail ($\gamma_- < 1$). The Sign-Aware SAE will achieve $\gamma_+ \approx \gamma_- \approx 1$ simultaneously, indicating that its two-sided scaling and thresholds are necessary to calibrate both regimes along the same direction.
+\end{itemize}
+
+\subsection{Protocol B: Directional Deviation Detection (Resource Constrained)}
+In control systems and operations monitoring, deviations often carry directional semantics (e.g., "Pressure Too High" vs. "Pressure Too Low"). This protocol benchmarks the Sign-Aware SAE as a resource-constrained anomaly detector in such settings.
+
+\paragraph{Setup.}
+We simulate a high-dimensional sensor array with $N=1024$ channels. "Normal" data follows a Gaussian distribution $\mathcal{N}(0, 1)$ componentwise. Anomalies are introduced as directional shifts $\pm \Delta$ on specific axes, where $\Delta \gg 1$ (e.g., an additive offset on a subset of coordinates).
+\begin{itemize}
+    \item \textbf{Latent Budget Constraint:} We restrict the SAE width to $H < N$ (an undercomplete regime). This forces the model to prioritize efficient compression and makes the width reduction from anticorrelated features practically meaningful.
+\end{itemize}
+
+\paragraph{Anomaly Scoring.}
+For the Sign-Aware SAE, we define directional anomaly scores using the separate tails of the Bi-Jump-ReLU gate:
+\begin{equation}
+    \text{Score}_{\text{high}}(x) = \sum_i \text{ReLU}\big(\pi_i(x) - \tau_i^+\big), \qquad
+    \text{Score}_{\text{low}}(x)  = \sum_i \text{ReLU}\big(-\pi_i(x) - \tau_i^-\big),
+\end{equation}
+where $\tau_i^+$ and $\tau_i^-$ are per-latent thresholds calibrated on a clean validation set, e.g., the 99th percentile of $\pi_i(x)$ and $-\pi_i(x)$ respectively under normal data. We treat $\text{Score}_{\text{high}}$ and $\text{Score}_{\text{low}}$ as separate detectors for "too high" and "too low" deviations.
+
+\paragraph{Hypothesis \& Expected Results.}
+A baseline SAE with non-negative activations must, under a fixed width $H$, either:
+\begin{enumerate}
+    \item Allocate two latents to cover one channel's $\pm$ deviations (halving the number of monitored channels), or
+    \item Ignore one direction entirely and only detect deviations in the represented polarity.
+\end{enumerate}
+We evaluate \textit{Directional Recall @ Fixed FPR} for each anomaly type. Concretely, we choose per-direction thresholds on $\text{Score}_{\text{high}}$ and $\text{Score}_{\text{low}}$ to achieve a false positive rate of $1\%$ on clean validation data, and measure the recall on high and low anomalies separately. We predict the Sign-Aware SAE will achieve substantially higher recall, by approximately $2\times$ in the number of channels for which both $\pm$ deviations are detectable under the same latent budget.
+
+\subsection{Protocol C: Geometric Validation on Toy Models}
+This protocol replicates the setup of \cite{elhage2022toy} to provide visual and geometric confirmation that the Sign-Aware SAE correctly identifies and consolidates anticorrelated subspaces.
+
+\paragraph{Data Geometry.}
+We generate $k$ pairs of features embedded in $\R^2$ (the "unit circle" visualization). Features within a pair are strictly anticorrelated (mutually exclusive). We train models with dictionary width $M=k$ (Sign-Aware) and $M=2k$ (Baseline), so that in the ideal case the baseline allocates one latent per feature, while the Sign-Aware model allocates one latent per pair.
+
+\paragraph{Visualization A: The Unit Circle.}
+We project the columns of the decoder $D$ onto the 2D data plane and plot them on the unit circle.
+
+\begin{itemize}
+    \item \textbf{Baseline Expectation:} Two distinct vectors at $180^\circ$ separation (antipodal) for each feature pair.
+    \item \textbf{Sign-Aware Expectation:} A single vector per pair. The "negative" feature is represented by the negative activation of the same latent, rather than by an additional decoder vector.
+\end{itemize}
+
+\paragraph{Visualization B: The Bi-Jump Histogram.}
+We collect activations for a single trained latent over the dataset and plot the histogram of $a_i(x)$.
+
+\begin{itemize}
+    \item \textbf{Sign-Aware Expectation:} The histogram should reveal a tri-modal distribution: a large mass exactly at zero (the dead zone $[-\delta_i^-, \delta_i^+]$), a lobe of positive activations, and a lobe of negative activations. This visually confirms the functionality of the Bi-Jump-ReLU activation function defined in \cref{eq:bi_jump_relu}.
+\end{itemize}
+
+\paragraph{Quantitative Metric: Pair Consolidation Rate.}
+We vary the correlation coefficient $\rho_{j_1 j_2}$ between feature pairs from $-1$ (perfectly anticorrelated) to $0$ (uncorrelated), and measure the \textit{Pair Consolidation Rate}: the fraction of ground-truth pairs represented by a single latent.
+
+We define that a ground-truth pair $(j_1,j_2)$ is \emph{consolidated} by latent $i$ if:
+\begin{itemize}
+    \item The decoder column $D_{:,i}$ has cosine similarity above a threshold $\tau$ (e.g., $\tau = 0.9$) with both feature directions $u_{j_1}$ and $u_{j_2}$, and
+    \item The sign of $a_i(x)$ across the dataset is positively correlated with the ground-truth feature sign $s_{j_1}$ when $f_{j_1}$ is active and negatively correlated when $f_{j_2}$ is active.
+\end{itemize}
+The Pair Consolidation Rate is the fraction of ground-truth pairs for which there exists at least one latent satisfying these conditions.
+
+\begin{itemize}
+    \item \textbf{Prediction:} We expect a phase-transition-like behavior as a function of $\rho_{j_1 j_2}$. As $\rho_{j_1 j_2} \to -1$, the Sign-Aware SAE should abruptly shift from using two latents to using one, driving the Pair Consolidation Rate toward 1. As $\rho_{j_1 j_2} \to 0$, consolidation should become suboptimal, and the model should naturally revert to using distinct latents, reducing the consolidation rate.
+\end{itemize}
+
+%----------------------------------------------------------------------------------------
+%	6. RESULTS
+%----------------------------------------------------------------------------------------
+
+\section{Results}
+\subsection{Protocol A: Asymmetry and Split-Scale Calibration}
+
+In this protocol, we evaluated the ability of the Sign-Aware Gated SAE to model features with asymmetric distributions and signed magnitudes. The ground-truth features were generated with a LogNormal distribution ($\mu=0, \sigma=0.5$) on the positive axis and an Exponential distribution ($\lambda=1.5$) on the negative axis.
+
+We compare the models based on the \textit{Split-Scale Calibration} coefficients $\gamma_+$ and $\gamma_-$ (ideal value $= 1.0$), and the Relative Reconstruction Error for each regime.
+
+
+
+\paragraph{Quantitative Performance.}
+We observed distinct performance characteristics across the three architectures:
+
+\begin{itemize}
+    \item \textbf{Sign-Aware Gated SAE (Ours):} Achieved near-perfect calibration with $\gamma_+ = 1.04 \pm 0.01$ and $\gamma_- = 1.06 \pm 0.01$. The relative reconstruction error was negligible, at $0.04$ (positive) and $0.06$ (negative).
+    \item \textbf{Standard Gated SAE:} Struggled with the asymmetric constraints, yielding $\gamma_+ = 1.22 \pm 0.06$ (over-estimation) and $\gamma_- = -0.21 \pm 0.02$ (failure to model negative correlation). The relative error was significantly higher: $0.23$ (positive) and $1.21$ (negative).
+    \item \textbf{Baseline ReLU SAE:} Failed to converge to a stable representation for the signed features, exhibiting high variance across seeds ($\sigma > 1.0$) and relative errors exceeding $1.0$ in both regimes.
+\end{itemize}
+
+\paragraph{Analysis: Decoupled Magnitude Estimation.}
+The results confirm that the Sign-Aware Gated SAE successfully decouples magnitude estimation for opposite polarities. While the Standard Gated SAE attempts to fit a single scalar $r$ to two conflicting distributions, resulting in an over-estimated positive slope and a collapsed negative slope. Our model utilizes the independent $r^+$ and $r^-$ parameters to match the LogNormal and Exponential distributions simultaneously. The low relative error ($< 6\%$) indicates that the single shared direction $D_{:,i}$ is sufficient to capture the subspace, provided the activation function can handle the bi-directional statistics.
+
+
+
+%----------------------------------------------------------------------------------------
+%	References and Appendix would follow
+%----------------------------------------------------------------------------------------
+
+\bibliographystyle{alpha}
+% \bibliography{references} % Placeholder for BibTeX
+
+\end{document}

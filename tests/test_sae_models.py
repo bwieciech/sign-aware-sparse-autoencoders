@@ -482,5 +482,5 @@ class TestSAEModels(unittest.TestCase):
         self.assertEqual(output["y_pred"].shape, (self.n_instances, self.batch_size, self.d_in))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()

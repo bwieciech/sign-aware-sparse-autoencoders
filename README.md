@@ -14,4 +14,5 @@
 
 ### Notes
 - Requirements now include `matplotlib` and `scipy` for plotting and Hungarian alignment.
+- Requirements now include `PyYAML` for YAML experiment configs.
 - Optional Weights & Biases logging activates when both `wandb_project` and `wandb_api_key` are provided in the experiment config.

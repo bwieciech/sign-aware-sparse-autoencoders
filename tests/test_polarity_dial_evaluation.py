@@ -102,5 +102,5 @@ class TestPolarityDialEvaluation(unittest.TestCase):
         self.assertIsNone(first_entry["gamma_minus"])
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     unittest.main()
