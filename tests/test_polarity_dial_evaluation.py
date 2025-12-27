@@ -1,5 +1,6 @@
 import unittest
 
+import einops
 import torch
 
 from sgnsae.experiments.polarity_dial.evaluation import (
@@ -17,7 +18,12 @@ class DummyAlignedModel(torch.nn.Module):
         self.latents = latents.unsqueeze(0)
 
     def forward(self, x: torch.Tensor) -> dict:
-        return {"latents": self.latents}
+        x_hat = einops.einsum(
+            self.W_dec,
+            self.latents,
+            "n_instances d_in d_hidden, n_instances batch d_hidden -> n_instances batch d_in",
+        )
+        return {"latents": self.latents, "x_hat": x_hat}
 
 
 class TestPolarityDialEvaluation(unittest.TestCase):
@@ -67,6 +73,8 @@ class TestPolarityDialEvaluation(unittest.TestCase):
         self.assertAlmostEqual(gamma_pairs[(1, 1)]["gamma_plus"], 1.0, places=5)
         summary = calibration["summary"]
         self.assertGreaterEqual(summary["num_pairs"], 3)
+        self.assertIn("test_reconstruction_mse", summary)
+        self.assertIn("test_l0", summary)
 
     def test_gamma_skips_when_insufficient_samples(self) -> None:
         # given

@@ -149,6 +149,16 @@ def compute_alignment_and_calibration(
         output = model(x_test)
     latents = output["latents"][0]
 
+    # Protocol-level metrics (works for SAE and GatedSAE outputs).
+    recon_key = "x_hat" if "x_hat" in output else ("y_pred" if "y_pred" in output else None)
+    if recon_key is None:
+        raise ValueError(
+            "Model output does not contain a reconstruction key ('x_hat' or 'y_pred')."
+        )
+    x_hat = output[recon_key][0]
+    test_reconstruction_mse = float((x_hat - x_test).pow(2).mean().item())
+    test_l0 = float((latents.abs() > 1e-8).float().sum(dim=-1).mean().item())
+
     scatter_positive_true: List[float] = []
     scatter_positive_pred: List[float] = []
     scatter_negative_true: List[float] = []
@@ -211,6 +221,8 @@ def compute_alignment_and_calibration(
     rel_error_minus_values = [entry["rel_error_minus"] for entry in per_pair_entries]
 
     calibration_summary = {
+        "test_reconstruction_mse": test_reconstruction_mse,
+        "test_l0": test_l0,
         "mean_gamma_plus": _safe_mean(gamma_plus_values),
         "mean_gamma_minus": _safe_mean(gamma_minus_values),
         "mean_rel_error_plus": _safe_mean(rel_error_plus_values),
