@@ -817,8 +817,8 @@ class TestSAEBaseResample(unittest.TestCase):
 
         # then
         self.assertTrue(mask[0, 0])
-        torch.testing.assert_close(model.W_enc[0, 0], expected[0], atol=0, rtol=0)
         torch.testing.assert_close(model.W_dec[:, :, 0].squeeze(0), expected[0], atol=0, rtol=0)
+        torch.testing.assert_close(model.b_enc[0, 0], torch.tensor(0.0), atol=0, rtol=0)
         torch.testing.assert_close(model.act_offset[0, 0], torch.tensor(1e-3))
 
     def test_resample_no_op_when_no_latents(self) -> None:
@@ -927,11 +927,12 @@ class TestGatedSAEBehavior(unittest.TestCase):
             device="cpu",
         )
         with torch.no_grad():
-            model.W_enc.data = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
-            model.W_dec.data = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
+            model.W_dec.data = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])  # shared weights => identity dictionary
             model.b_enc.data = torch.zeros(1, 2)
             model.b_dec.data = torch.zeros(1, 2)
+            model.log_alpha_gate.data.zero_()
             model.r_mag.data = torch.zeros(1, 2)
+            model.r_mag_neg.data.zero_()
             model.b_mag.data = torch.tensor([[0.1, 0.2]])
             model.act_offset.data = torch.tensor([[0.05, 0.05]])
         x = torch.tensor([[2.0, -3.0]])
@@ -947,7 +948,13 @@ class TestGatedSAEBehavior(unittest.TestCase):
         torch.testing.assert_close(reconstruction, expected_latents, rtol=0, atol=0)
         expected_recon_loss = (reconstruction - x).pow(2).mean(dim=(-1, -2))
         torch.testing.assert_close(losses["reconstruction_losses"], expected_recon_loss)
-        expected_sparsity = output["pi_gate"].abs().sum(dim=-1).mean(-1)
+        pi_gate = output["pi_gate"]
+        delta_positive = torch.relu(model.act_offset).unsqueeze(1)
+        delta_negative = delta_positive
+        expected_sparsity_source = torch.relu(pi_gate - delta_positive) + torch.relu(
+            -pi_gate - delta_negative
+        )
+        expected_sparsity = expected_sparsity_source.sum(dim=-1).mean(-1)
         torch.testing.assert_close(losses["sparsity_losses"], expected_sparsity)
 
     def test_forward_rejects_invalid_dimensions(self) -> None:

@@ -5,6 +5,7 @@ import torch.nn
 from torch import Tensor
 
 
+
 class SAEBase(abc.ABC, torch.nn.Module):
     def __init__(
         self,
@@ -51,11 +52,6 @@ class SAEBase(abc.ABC, torch.nn.Module):
             )
             self.single_activation_offset = single_activation_offset
 
-        self.W_enc = torch.nn.Parameter(
-            torch.nn.init.kaiming_uniform_(
-                torch.zeros(n_instances, d_hidden, d_in, device=device)
-            )
-        )
         self.b_enc = torch.nn.Parameter(
             torch.zeros(n_instances, d_hidden, device=device)
         )
@@ -88,7 +84,6 @@ class SAEBase(abc.ABC, torch.nn.Module):
             1e-2 * new_weights / (new_weights.norm(dim=1, keepdim=True) + 1e-8)
         )
 
-        self.W_enc.data[resample_latents_mask] = new_weights
         self.b_enc.data[resample_latents_mask] = torch.zeros(
             resample_latents_count, device=self.device
         )
@@ -106,5 +101,12 @@ class SAEBase(abc.ABC, torch.nn.Module):
                 self.act_offset_right.data[resample_latents_mask] = 1e-3 * torch.ones(
                     resample_latents_count, device=self.device
                 )
+
+        # Optional: reset any gated-SAE specific per-latent parameters if they exist.
+        for name in ("r_mag", "r_mag_neg", "b_mag", "log_alpha_gate"):
+            if hasattr(self, name):
+                p = getattr(self, name)
+                if isinstance(p, torch.nn.Parameter) and p.shape == self.b_enc.shape:
+                    p.data[resample_latents_mask] = 0.0
 
         return resample_latents_mask

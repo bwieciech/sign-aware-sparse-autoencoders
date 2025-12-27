@@ -141,6 +141,56 @@ After finishing implementation, always review your code for potential optimizati
 unused imports, variables, or functions. Check for redundancy, unnecessary complexity, or unreachable code, and
 eliminate them.
 
+When asked to apply diffs / patches, insert only the lines marked with a `+` and delete only marked with a `-`. Example:
+
+File:
+```python3
+def multiply(v1, v2):
+    return v1 * v2
+
+def sum(v1, v2):
+    return v1 + v2
+```
+
+Diff:
+```
+-def multiply(v1, v2):
+-    return v1 * v2
++from typing import List
++
++
++def multiply(*vals: List[float]) -> float:
++    result = 1
++    for val in vals:
++        result *= val
++    return result
+ 
+ def sum(v1: float, v2: float) -> float:
+     return v1 + v2
+\ No newline at end of file
+```
+
+Output:
+```python3
+from typing import List
+
+
+def multiply(*vals: List[float]) -> float:
+    result = 1
+    for val in vals:
+        result *= val
+    return result
+
+def sum(v1: float, v2: float) -> float:
+    return v1 + v2
+```
+
+Explanation: The implementation of the `sum` function differs in the patch, but the lines referencing that function are
+not marked with `+` or `-`, and therefore should not be changed.
+
+When asked to apply diffs, **do not change other lines**,  even if the change would break code, for example in another
+file. You will likely be asked to make these changes in subsequent diffs. Stick to what is exactly outlined in the diff.
+
 ## Python
 
 ### Guidelines

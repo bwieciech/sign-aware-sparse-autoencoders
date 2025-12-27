@@ -4,7 +4,8 @@ import einops
 import torch
 from torch import Tensor
 
-from sgnsae.models import SAEBase
+
+from sgnsae.models.sae_base import SAEBase
 
 
 class SAE(SAEBase):
@@ -37,34 +38,41 @@ class SAE(SAEBase):
         while x.ndim < 3:
             x = x.unsqueeze(0)
 
+        W_dec_norm = self.W_dec / (self.W_dec.norm(dim=1, keepdim=True) + 1e-8)
+
+        # Shared-weights projection: t(x) = D^T (x - b_dec), then add encoder bias.
         x = (
             einops.einsum(
-                self.W_enc,
                 x - self.b_dec.unsqueeze(1),
-                "n_instances d_hidden d_in, n_instances batch d_in -> batch n_instances d_hidden",
+                W_dec_norm,
+                "n_instances batch d_in, n_instances d_in d_hidden -> batch n_instances d_hidden",
             )
             + self.b_enc
         )
 
         if self.sign_aware:
             if self.single_activation_offset:
-                latents = (x.abs() > self.act_offset) * torch.where(
-                    x > 0, x - self.act_offset, x + self.act_offset
+                delta = torch.relu(self.act_offset)
+                latents = torch.where(
+                    x > delta,
+                    x - delta,
+                    torch.where(x < -delta, x + delta, 0.0),
                 )
             else:
+                delta_pos = torch.relu(self.act_offset_right)
+                delta_neg = torch.relu(self.act_offset_left)
                 latents = torch.where(
-                    x > torch.relu(self.act_offset_right),
-                    x - self.act_offset_right,
+                    x > delta_pos,
+                    x - delta_pos,
                     torch.where(
-                        x < -torch.relu(self.act_offset_left),
-                        x + self.act_offset_left,
+                        x < -delta_neg,
+                        x + delta_neg,
                         0.0,
                     ),
                 )
         else:
             latents = torch.relu(x)
 
-        W_dec_norm = self.W_dec / (self.W_dec.norm(dim=1, keepdim=True) + 1e-8)
         x_hat = (
             einops.einsum(
                 W_dec_norm,

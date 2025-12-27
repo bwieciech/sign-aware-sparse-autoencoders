@@ -231,7 +231,6 @@ class TestSAEModels(unittest.TestCase):
         )
 
         with torch.no_grad():
-            model_vanilla.W_enc.data = model_sign_aware.W_enc.data.clone()
             model_vanilla.b_enc.data = model_sign_aware.b_enc.data.clone()
             model_vanilla.W_dec.data = model_sign_aware.W_dec.data.clone()
             model_vanilla.b_dec.data = model_sign_aware.b_dec.data.clone()
@@ -271,7 +270,6 @@ class TestSAEModels(unittest.TestCase):
         )
 
         with torch.no_grad():
-            model_vanilla.W_enc.data = model_sign_aware.W_enc.data.clone()
             model_vanilla.b_enc.data = model_sign_aware.b_enc.data.clone()
             model_vanilla.W_dec.data = model_sign_aware.W_dec.data.clone()
             model_vanilla.b_dec.data = model_sign_aware.b_dec.data.clone()
@@ -393,7 +391,6 @@ class TestSAEModels(unittest.TestCase):
         )
         
         with torch.no_grad():
-            model_dual.W_enc.data = model_single.W_enc.data.clone()
             model_dual.b_enc.data = model_single.b_enc.data.clone()
             model_dual.W_dec.data = model_single.W_dec.data.clone()
             model_dual.b_dec.data = model_single.b_dec.data.clone()
@@ -437,7 +434,6 @@ class TestSAEModels(unittest.TestCase):
         )
         
         with torch.no_grad():
-            model_dual.W_enc.data = model_single.W_enc.data.clone()
             model_dual.b_enc.data = model_single.b_enc.data.clone()
             model_dual.W_dec.data = model_single.W_dec.data.clone()
             model_dual.b_dec.data = model_single.b_dec.data.clone()
