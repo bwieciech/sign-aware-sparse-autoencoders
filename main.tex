@@ -122,7 +122,7 @@ The signed latent activation $a_i(x)$ is then defined as:
     a_i(x) = 
     \begin{cases} 
         \text{ReLU}\big(e^{r_i^+} t_i(x) + b_{\text{mag}, i}\big) & \text{if } s_i(x) = +1 \\
-        -\text{ReLU}\big(-e^{r_i^-} t_i(x) - b_{\text{mag}, i}\big) & \text{if } s_i(x) = -1 \\
+        -\text{ReLU}\big(-e^{r_i^-} t_i(x) + b_{\text{mag}, i}\big) & \text{if } s_i(x) = -1 \\
         0 & \text{if } s_i(x) = 0,
     \end{cases}
 \end{equation}
@@ -150,7 +150,7 @@ The sparsity term $\Omega_{\text{gate}}$ is a hinge-like, piecewise-linear penal
 \end{equation}
 This penalty is exactly zero within the dead zone $[-\delta_i^-, \delta_i^+]$ and grows linearly as $\pi_i(x)$ moves further outside it. Intuitively, it encourages inactive gates to remain inside the dead zone and active gates to exceed their thresholds by the minimum amount necessary; combined with the auxiliary loss, this yields sparse signed activations.
 
-To provide direct supervision to the gate, we introduce an auxiliary reconstruction that uses only the gate output, with a fixed unit magnitude per side. Let $D^{\text{frozen}}$ denote a copy of the decoder whose parameters are held fixed when optimizing this term (e.g., updated periodically or via an exponential moving average of $D$). The auxiliary loss is
+To provide direct supervision to the gate, we introduce an auxiliary reconstruction that uses only the gate output, with a continuous hinge magnitude per side (equal to the amount by which the gate pre-activation exceeds its learned threshold). Let $D^{\text{frozen}}$ denote a copy of the decoder whose parameters are held fixed when optimizing this term (e.g., updated periodically or via an exponential moving average of $D$). The auxiliary loss is
 \begin{equation}
     \mathcal{L}_{\text{aux}}(x) = \big\|x - D^{\text{frozen}} \big[ \text{ReLU}(\pi(x) - \delta^+) - \text{ReLU}(-\pi(x) - \delta^-) \big] - b_{\text{dec}}\big\|_2^2,
 \end{equation}
@@ -225,8 +225,9 @@ with small isotropic noise $\epsilon$.
 
 \paragraph{Baselines.}
 \begin{itemize}
-    \item \textbf{Standard Gated SAE:} Uses a tied encoder $W_{\text{mag}} \propto W_{\text{gate}}$ with a single scaling factor $r_j$ per latent and non-negative activations.
-    \item \textbf{Baseline ReLU SAE:} Standard architecture with a single non-negative activation per feature.
+    \item \textbf{Signed Symmetric Gated SAE (Ablation):} A sign-aware gated model that allows signed activations but enforces \emph{symmetric} magnitude calibration across polarities (e.g., $r_i^+ = r_i^-$ and optionally $\delta_i^+ = \delta_i^-$). This isolates the effect of introducing independent $(r_i^+, r_i^-)$ and $(\delta_i^+, \delta_i^-)$ in our Bi-Jump-ReLU.
+    \item \textbf{Standard (Non-negative) Gated SAE:} A conventional gated SAE with ReLU latents. Note that representing signed coefficients along a single axis requires allocating two latents to the pair $(+u_j, -u_j)$; we include this baseline primarily as a sanity check and optionally run it with $2\times$ width to remove the representational confound.
+    \item \textbf{Baseline ReLU SAE:} Standard architecture with non-negative activations; similarly requires paired atoms to represent both signs along one axis.
 \end{itemize}
 
 \paragraph{Latent--Feature Alignment.}
@@ -248,7 +249,7 @@ We then compute separate least-squares rescaling factors for the positive and ne
 \end{align}
 \begin{itemize}
     \item \textbf{Ideal Outcome:} $\gamma_+ \approx 1$ and $\gamma_- \approx 1$.
-    \item \textbf{Hypothesis:} The Standard Gated SAE, with a single scalar $r_j$, will learn a compromise that under-reconstructs the heavy tail ($\gamma_+ > 1$) and over-reconstructs the light tail ($\gamma_- < 1$). The Sign-Aware SAE will achieve $\gamma_+ \approx \gamma_- \approx 1$ simultaneously, indicating that its two-sided scaling and thresholds are necessary to calibrate both regimes along the same direction.
+    \item \textbf{Hypothesis:} The \emph{Signed Symmetric Gated SAE} (single effective scale) will learn a compromise that mis-calibrates at least one tail when the positive and negative magnitude distributions differ substantially. In contrast, the Sign-Aware Gated SAE will achieve $\gamma_+ \approx \gamma_- \approx 1$ simultaneously, indicating that independent $(r^+, r^-)$ and $(\delta^+, \delta^-)$ are necessary to calibrate both regimes along a shared axis.
 \end{itemize}
 
 \subsection{Protocol B: Directional Deviation Detection (Resource Constrained)}
