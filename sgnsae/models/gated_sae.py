@@ -16,6 +16,7 @@ class GatedSAE(SAEBase):
         d_hidden: int,
         resample_latents_threshold: int,
         sign_aware: bool,
+        symmetric_magnitude: bool = False,
         reset_activation_offsets_on_resample: Optional[bool] = None,
         single_activation_offset: Optional[bool] = None,
         device: str = "cpu",
@@ -30,6 +31,9 @@ class GatedSAE(SAEBase):
             reset_activation_offsets_on_resample=reset_activation_offsets_on_resample,
             single_activation_offset=single_activation_offset,
         )
+        if symmetric_magnitude and not sign_aware:
+            raise ValueError("symmetric_magnitude=True requires sign_aware=True.")
+        self.symmetric_magnitude = symmetric_magnitude
         # Gate parameters for paper form: pi = alpha * t + beta
         # We store log(alpha) for stability and positivity.
         self.log_alpha_gate = torch.nn.Parameter(
@@ -39,7 +43,7 @@ class GatedSAE(SAEBase):
         self.r_mag = torch.nn.Parameter(
             torch.zeros(n_instances, d_hidden, device=device)
         )
-        if self.sign_aware:
+        if self.sign_aware and not self.symmetric_magnitude:
             self.r_mag_neg = torch.nn.Parameter(
                 torch.zeros(self.n_instances, self.d_hidden, device=self.device)
             )
@@ -89,9 +93,12 @@ class GatedSAE(SAEBase):
 
             # Option (2): shared additive bias b_mag in BOTH polarities
             a_pos = torch.relu(scale_pos * t + self.b_mag)
-            scale_neg = torch.exp(
-                self.r_mag_neg.clamp(min=-self._exp_clamp, max=self._exp_clamp)
-            )
+            if self.symmetric_magnitude:
+                scale_neg = scale_pos
+            else:
+                scale_neg = torch.exp(
+                    self.r_mag_neg.clamp(min=-self._exp_clamp, max=self._exp_clamp)
+                )
             a_neg = -torch.relu(-scale_neg * t + self.b_mag)
 
             latents = torch.where(

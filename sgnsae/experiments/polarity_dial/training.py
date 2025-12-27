@@ -43,6 +43,7 @@ def _instantiate_model(
             d_hidden=model_config.d_hidden,
             resample_latents_threshold=resample_latents_threshold,
             sign_aware=model_config.sign_aware,
+            symmetric_magnitude=model_config.symmetric_magnitude,
             reset_activation_offsets_on_resample=model_config.reset_activation_offsets_on_resample,
             single_activation_offset=model_config.single_activation_offset,
             device=device,

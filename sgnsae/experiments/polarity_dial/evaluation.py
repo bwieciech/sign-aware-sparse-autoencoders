@@ -22,7 +22,8 @@ def align_decoder_and_features(
 ) -> Tuple[Dict[str, Any], Tensor]:
     decoder_directions = _get_decoder_directions(model)
     cosine_matrix = decoder_directions.cpu() @ feature_directions.cpu().transpose(0, 1)
-    row_indices, col_indices = linear_sum_assignment(-cosine_matrix.numpy())
+    # Sign-invariant matching: feature axes are equivalent up to a sign flip.
+    row_indices, col_indices = linear_sum_assignment((-cosine_matrix.abs()).numpy())
 
     matched_pairs = []
     for latent_idx, feature_idx in zip(row_indices, col_indices):
@@ -31,6 +32,9 @@ def align_decoder_and_features(
                 "latent_index": int(latent_idx),
                 "feature_index": int(feature_idx),
                 "cosine_similarity": float(cosine_matrix[latent_idx, feature_idx]),
+                "abs_cosine_similarity": float(
+                    cosine_matrix[latent_idx, feature_idx].abs()
+                ),
             }
         )
     unmatched_latents = [

@@ -74,11 +74,14 @@ class PolarityDialModelVariantConfig:
     num_epochs: int
     batch_size: int
     adam_betas: Tuple[float, float]
+    symmetric_magnitude: bool = False
     resample_latents_epochs: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("Model name must be a non-empty string.")
+        if self.symmetric_magnitude and not self.sign_aware:
+            raise ValueError("symmetric_magnitude requires sign_aware=True.")
         _validate_positive_int(self.d_hidden, "d_hidden")
         _validate_positive_int(self.num_epochs, "num_epochs")
         _validate_positive_int(self.batch_size, "batch_size")

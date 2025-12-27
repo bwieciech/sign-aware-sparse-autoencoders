@@ -97,7 +97,7 @@ We generalize the Gated SAE to handle signed activations while preserving the "n
 We first introduce a shared linear projection for each latent that is geometrically aligned with the decoder:
 
 \begin{equation}
-    t_i(x) = D_{:,i}^\top (x - \mu), \qquad i = 1,\dots,H.
+    t_i(x) = D_{:,i}^\top (x - b_{\text{dec}}), \qquad i = 1,\dots,H.
 \end{equation}
 
 The gate pre-activation for latent $i$ is then taken to be an affine transformation of this projection:
@@ -154,6 +154,9 @@ To provide direct supervision to the gate, we introduce an auxiliary reconstruct
 \begin{equation}
     \mathcal{L}_{\text{aux}}(x) = \big\|x - D^{\text{frozen}} \big[ \text{ReLU}(\pi(x) - \delta^+) - \text{ReLU}(-\pi(x) - \delta^-) \big] - b_{\text{dec}}\big\|_2^2,
 \end{equation}
+
+\paragraph{Implementation note.}
+In our implementation, we stop gradients from the gate sparsity term and the auxiliary reconstruction from flowing into the decoder dictionary. Concretely, the shared projection $t_i(x)$ used to form the gate logits $\pi_i(x)$ is treated as a constant for these terms (stop-gradient), and $D^{\text{frozen}}$ is implemented as the decoder dictionary with gradients detached. This preserves the intended separation: the auxiliary objective trains gate parameters without shaping the decoder geometry.
 where $\pi(x)$, $\delta^+$ and $\delta^-$ are applied elementwise across latents.
 
 \textbf{Training dynamics:} The auxiliary reconstruction provides gradients only to the gate-related parameters $(\alpha_i, \beta_i, \delta_i^+, \delta_i^-)$ via $\pi_i(x)$, while $D^{\text{frozen}}$ is not updated through $\mathcal{L}_{\text{aux}}$. The main reconstruction term updates both the decoder $D$ and the magnitude parameters $(r_i^+, r_i^-, b_{\text{mag},i})$ via the signed activations $a_i(x)$. This cleanly separates detection (learned through the auxiliary path and gate penalty) from magnitude estimation (learned through the main reconstruction), mirroring the no-shrinkage argument for Gated SAEs in the non-signed case.

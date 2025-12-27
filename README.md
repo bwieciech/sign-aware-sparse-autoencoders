@@ -1,6 +1,23 @@
 # embeddings-sparse-autoencoders
 
 ## Polarity Dial Experiment (Protocol A)
+
+### Signed Symmetric Gated SAE (Ablation)
+To run the Protocol A ablation promised in the paper (symmetric magnitude calibration), set the following in the model config:
+
+- `sign_aware: true`
+- `symmetric_magnitude: true` (ties the negative magnitude scale to the positive one, so effectively $r^- = r^+$)
+- optionally `single_activation_offset: true` if you also want symmetric thresholds ($\delta^- = \delta^+$)
+
+Example (inside a model entry in the Protocol A config JSON/YAML):
+```json
+{
+  "sae_class": "GatedSAE",
+  "sign_aware": true,
+  "symmetric_magnitude": true,
+  "single_activation_offset": true
+}
+```
 - Entry point: `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path <config>`.
 - Outputs: `<output_dir>/polarity_dial/<run_id>/` with config, data exports, per-model checkpoints/metrics/plots, and aggregated comparisons.
 - Default device selection uses CUDA when available unless overridden in the config.
