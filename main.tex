@@ -327,6 +327,9 @@ The Pair Consolidation Rate is the fraction of ground-truth pairs for which ther
 \subsection{Protocol A: Asymmetry and Split-Scale Calibration}
 \label{sec:results_protocol_a}
 
+TODO: Different model types may do differently well with different parameters. Create results where we compare MSE
+for a set L0, and L0 for set MSE.
+
 \paragraph{Setup.}
 We evaluate Protocol A on the synthetic signed-feature dataset described in \S5.1.
 Each ground-truth axis is active with probability $\rho=0.05$ and, when active, takes a positive sign with probability $p_+=0.7$ and a negative sign otherwise. Conditional on sign, magnitudes are drawn from a LogNormal$(\mu=0,\sigma=0.5)$ distribution for positives and an Exponential$(\lambda=1.5)$ distribution for negatives, with additive isotropic noise $\epsilon \sim \mathcal{N}(0, 0.1^2 I)$.
