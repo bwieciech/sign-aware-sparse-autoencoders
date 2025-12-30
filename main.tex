@@ -197,6 +197,10 @@ Taking $c \approx 0$ for simplicity yields the approximate threshold
 \end{equation}
 For a model dimension $d_{\text{in}} = 4096$, this gives $p \gtrsim 8/4100 \approx 0.2\%$. Thus, under a simple parameter-counting model, the Sign-Aware SAE is strictly parameter-efficient as soon as anticorrelated pairs constitute even a vanishingly small fraction of the feature set (on the order of $10^{-3}$ for typical transformer layer widths).
 
+\paragraph{Symmetric-magnitude variant.}
+An ablation of our architecture ties the per-polarity magnitude scaling parameters ($r_i^+=r_i^-$), while retaining signed gating and asymmetric thresholds. In the parameter-counting model above, this reduces the per-latent scalar overhead by one, i.e., the per-latent count becomes $d_{\text{in}} + c + 3$ instead of $d_{\text{in}} + c + 4$.
+Empirically, on Protocol A with the default generator settings (LogNormal positives vs.\ Exponential negatives, $p_+=0.7$), this symmetric-magnitude variant achieves essentially identical reconstruction error and very similar split-regime calibration to the full sign-aware model, indicating that the dominant gain in that setting comes from enabling signed activations along a shared decoder direction rather than from independent per-polarity scaling.
+
 \subsection{Computational Complexity}
 
 \textbf{Inference.} By caching the projection $t(x) = D^\top (x - \mu)$, the forward pass requires only one matrix multiplication for the encoder, identical in structure to the baseline. The subsequent gating and Bi-Jump-ReLU activations operate elementwise in $H_{\pm}$, just as in the standard Gated SAE. Since $H_{\pm} \le H$, the total inference FLOPs scale down by the factor $\left(1 - \frac{p}{2}\right)$ relative to a baseline with width $H$.
@@ -252,7 +256,7 @@ We then compute separate least-squares rescaling factors for the positive and ne
 \end{align}
 \begin{itemize}
     \item \textbf{Ideal Outcome:} $\gamma_+ \approx 1$ and $\gamma_- \approx 1$.
-    \item \textbf{Hypothesis:} The \emph{Signed Symmetric Gated SAE} (single effective scale) will learn a compromise that mis-calibrates at least one tail when the positive and negative magnitude distributions differ substantially. In contrast, the Sign-Aware Gated SAE will achieve $\gamma_+ \approx \gamma_- \approx 1$ simultaneously, indicating that independent $(r^+, r^-)$ and $(\delta^+, \delta^-)$ are necessary to calibrate both regimes along a shared axis.
+    \item \textbf{Hypothesis:} Allowing signed activations should enable simultaneous calibration on both sides of each ground-truth axis ($\gamma_+ \approx 1$ and $\gamma_- \approx 1$). The \emph{Signed Symmetric Gated SAE} ablation tests whether tying per-polarity magnitude scaling (e.g., $r^+=r^-$) degrades calibration when sign-conditioned magnitudes and/or frequencies are sufficiently asymmetric; any observed gap isolates the contribution of independent per-polarity scaling from sign-awareness itself.
 \end{itemize}
 
 \subsection{Protocol B: Directional Deviation Detection (Resource Constrained)}
@@ -321,25 +325,56 @@ The Pair Consolidation Rate is the fraction of ground-truth pairs for which ther
 
 \section{Results}
 \subsection{Protocol A: Asymmetry and Split-Scale Calibration}
+\label{sec:results_protocol_a}
 
-In this protocol, we evaluated the ability of the Sign-Aware Gated SAE to model features with asymmetric distributions and signed magnitudes. The ground-truth features were generated with a LogNormal distribution ($\mu=0, \sigma=0.5$) on the positive axis and an Exponential distribution ($\lambda=1.5$) on the negative axis.
+\paragraph{Setup.}
+We evaluate Protocol A on the synthetic signed-feature dataset described in \S5.1.
+Each ground-truth axis is active with probability $\rho=0.05$ and, when active, takes a positive sign with probability $p_+=0.7$ and a negative sign otherwise. Conditional on sign, magnitudes are drawn from a LogNormal$(\mu=0,\sigma=0.5)$ distribution for positives and an Exponential$(\lambda=1.5)$ distribution for negatives, with additive isotropic noise $\epsilon \sim \mathcal{N}(0, 0.1^2 I)$.
+All models use width $H=128$ and are trained for 50 epochs with identical optimization hyperparameters. We report mean $\pm$ standard deviation over three random seeds (0,1,2).
 
-We compare the models based on the \textit{Split-Scale Calibration} coefficients $\gamma_+$ and $\gamma_-$ (ideal value $= 1.0$), and the Relative Reconstruction Error for each regime.
+\paragraph{Metrics.}
+We align learned decoder columns to ground-truth directions using cosine similarity and Hungarian matching (\S5.1), then compute split-regime calibration slopes $\gamma_+$ and $\gamma_-$ via separate least-squares fits on the positive and negative subsets of the data. We summarize calibration by (i) the mean slopes $\bar{\gamma}_\pm$ across matched axes and (ii) the mean absolute slope error $\mathbb{E}[|\gamma_\pm-1|]$ across matched axes (lower is better).
 
+\begin{table}[t]
+    \centering
+    \caption{Protocol A results (mean $\pm$ std over three seeds). $L_0$ denotes the average number of non-zero latents per example. $\bar{\gamma}_\pm$ is the mean split-regime calibration slope across matched axes. $\mathbb{E}[|\gamma_\pm-1|]$ is the mean absolute slope error across matched axes.}
+    \label{tab:protocol_a_results}
+    \small\begin{tabular}{lcccccc}
+        \toprule
+        Model & MSE$\downarrow$ & $L_0\downarrow$ & $\bar{\gamma}_+$ & $\bar{\gamma}_-$ & $\mathbb{E}[|\gamma_+-1|]\downarrow$ & $\mathbb{E}[|\gamma_--1|]\downarrow$ \\
+        \midrule
+        ReLU SAE
+            & 0.016671 $\pm$ 0.000332 & 6.90 $\pm$ 0.06
+            & -82.244 $\pm$ 117.230 & 186.933 $\pm$ 56.460
+            & 244.736 $\pm$ 36.187 & 240.192 $\pm$ 93.588 \\
+        Gated SAE (non-negative)
+            & 0.012953 $\pm$ 0.000083 & 9.59 $\pm$ 0.38
+            & 1.167 $\pm$ 0.144 & -0.130 $\pm$ 0.064
+            & 0.520 $\pm$ 0.077 & 1.262 $\pm$ 0.050 \\
+        Sign-Aware Gated SAE (ours)
+            & \textbf{0.009963 $\pm$ 0.000005} & 9.17 $\pm$ 0.04
+            & 1.039 $\pm$ 0.004 & 1.056 $\pm$ 0.003
+            & \textbf{0.039 $\pm$ 0.004} & 0.056 $\pm$ 0.003 \\
+        Sign-Aware (symmetric magnitude)
+            & 0.009963 $\pm$ 0.000004 & 9.21 $\pm$ 0.07
+            & 1.044 $\pm$ 0.008 & 1.042 $\pm$ 0.006
+            & 0.044 $\pm$ 0.008 & \textbf{0.042 $\pm$ 0.006} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
+\paragraph{Sign-awareness resolves the negative-regime failure mode.}
+The non-sign-aware Gated SAE calibrates the positive regime moderately well ($\bar{\gamma}_+ \approx 1.17$), but fails on the negative regime: $\bar{\gamma}_- < 0$ and $\mathbb{E}[|\gamma_- - 1|] \approx 1.26$ (\cref{tab:protocol_a_results}). This is the expected representational limitation of non-negative latents: negative coefficients along a shared axis cannot be expressed directly without dedicating separate atoms to the opposite direction.
+In contrast, the Sign-Aware Gated SAE achieves near-ideal calibration on \emph{both} regimes simultaneously, with $\bar{\gamma}_+ \approx 1.04$, $\bar{\gamma}_- \approx 1.06$, and mean absolute slope errors below $0.06$ on both sides (\cref{tab:protocol_a_results}).
 
-\paragraph{Quantitative Performance.}
-We observed distinct performance characteristics across the three architectures:
+\paragraph{Reconstruction improves while maintaining comparable sparsity.}
+The Sign-Aware Gated SAE attains substantially lower reconstruction error than the non-sign-aware gated baseline (test MSE $0.009963$ vs.\ $0.012953$, a $23.1\%$ reduction), while using slightly \emph{fewer} active latents on average ($L_0$ $9.17$ vs.\ $9.59$). Relative to the plain ReLU SAE, the sign-aware model reduces MSE by $40.2\%$ (\cref{tab:protocol_a_results}).
 
-\begin{itemize}
-    \item \textbf{Sign-Aware Gated SAE (Ours):} Achieved near-perfect calibration with $\gamma_+ = 1.04 \pm 0.01$ and $\gamma_- = 1.06 \pm 0.01$. The relative reconstruction error was negligible, at $0.04$ (positive) and $0.06$ (negative).
-    \item \textbf{Standard Gated SAE:} Struggled with the asymmetric constraints, yielding $\gamma_+ = 1.22 \pm 0.06$ (over-estimation) and $\gamma_- = -0.21 \pm 0.02$ (failure to model negative correlation). The relative error was significantly higher: $0.23$ (positive) and $1.21$ (negative).
-    \item \textbf{Baseline ReLU SAE:} Failed to converge to a stable representation for the signed features, exhibiting high variance across seeds ($\sigma > 1.0$) and relative errors exceeding $1.0$ in both regimes.
-\end{itemize}
+\paragraph{Symmetric-magnitude ablation does not separate at this asymmetry level.}
+Enforcing symmetric magnitude scaling across polarities (tying $r^+=r^-$) produces essentially identical reconstruction error and very similar calibration statistics in this setting (\cref{tab:protocol_a_results}). Thus, for the default Protocol A generator parameters used here, the dominant empirical benefit comes from enabling \emph{signed} activations with a shared decoder direction; independent per-polarity magnitude scaling does not yield a measurable additional gain.
 
-\paragraph{Analysis: Decoupled Magnitude Estimation.}
-The results confirm that the Sign-Aware Gated SAE successfully decouples magnitude estimation for opposite polarities. While the Standard Gated SAE attempts to fit a single scalar $r$ to two conflicting distributions, resulting in an over-estimated positive slope and a collapsed negative slope. Our model utilizes the independent $r^+$ and $r^-$ parameters to match the LogNormal and Exponential distributions simultaneously. The low relative error ($< 6\%$) indicates that the single shared direction $D_{:,i}$ is sufficient to capture the subspace, provided the activation function can handle the bi-directional statistics.
-
+\paragraph{Degenerate calibration in the ReLU SAE baseline.}
+The plain ReLU SAE attains the highest MSE among the compared models, and its fitted calibration slopes are extremely large in magnitude and unstable across seeds (\cref{tab:protocol_a_results}). This behavior is consistent with the least-squares slope becoming ill-conditioned when the model's predicted coefficients for one regime are near-zero or otherwise poorly aligned with the signed ground truth.
 
 
 %----------------------------------------------------------------------------------------

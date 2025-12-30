@@ -111,7 +111,7 @@ Then open `<run_dir>/gamma_diff_bar_comparison.png` and confirm it visually refl
 
 Repeat for seeds 0, 1, and 2.
 
-### 5) Optional: run the Signed Symmetric Gated SAE ablation (paper baseline)
+### 5) Run the Signed Symmetric Gated SAE ablation (paper baseline)
 
 The paper describes an ablation that keeps sign-aware gating but enforces symmetric magnitude scaling across polarities (effectively $r^- = r^+$). This is implemented via a config flag on `GatedSAE`:
 

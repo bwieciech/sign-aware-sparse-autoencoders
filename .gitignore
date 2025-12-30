@@ -1,5 +1,6 @@
 assets/
 **/wandb/
+configs/*_ablation.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
