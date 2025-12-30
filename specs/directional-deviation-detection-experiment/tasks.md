@@ -1,0 +1,125 @@
+# Implementation Plan
+
+- [ ] 0. Decide and lock down baseline directional scoring (prevents “two-sided evidence” leakage)
+  - [x] 0.1 Update Protocol B specs to explicitly forbid baseline scoring that uses both tails of raw signed pre-activations from a single latent
+    - Ensure baseline scoring uses one-sided evidence signals (e.g., post-nonlinearity activations) and directional partitioning via decoder geometry.
+    - _Requirements: 3.3, 3.8_
+  - [x] 0.2 Add a unit test that fails if baseline scoring can detect both directions using a single latent via signed pre-activations
+    - _Requirements: 3.3_
+
+- [ ] 1. Add Protocol B config + CLI entrypoint
+  - [ ] 1.1 Implement Protocol B configuration models
+    - Create `sgnsae/experiments/directional_deviation/config.py` with dataclass configs from the design (`DirectionalDeviationDataConfig`, `DirectionalDeviationAnomalyConfig`, `DirectionalDeviationThresholdConfig`, `DirectionalDeviationModelVariantConfig`, `DirectionalDeviationExperimentConfig`).
+    - Implement config validation in `__post_init__` (counts positive, probabilities/quantiles/FPR in valid ranges, width constraints `d_hidden < num_channels` for Protocol B default mode).
+    - Implement JSON (and optionally YAML) config load helpers mirroring `sgnsae/experiments/polarity_dial/config.py`.
+    - Add config support for:
+      - separate anomaly counts for high vs low (per channel),
+      - optional multi-seed runs,
+      - optional symmetry-breaking normal mode (e.g., heteroskedastic),
+      - optional deterministic-algorithms flag,
+      - anomaly evaluation mode (`materialize` vs `stream`).
+    - _Requirements: 4.1, 4.2_
+  - [ ] 1.2 Implement CLI script to run Protocol B
+    - Add `sgnsae/scripts/run_directional_deviation_experiment.py` with `argparse` for `--config-path`.
+    - Wire the script to call a runner function and print the output run directory.
+    - _Requirements: 4.1, 4.2_
+
+- [ ] 2. Implement Protocol B synthetic data generation
+  - [ ] 2.1 Implement normal data generation with deterministic seeding
+    - Create `sgnsae/experiments/directional_deviation/data.py` and implement normal train/val/test-normal splits sampled IID from \(\mathcal{N}(0, I)\) componentwise.
+    - Ensure all splits are deterministic for a given seed and device.
+    - Implement optional symmetry-breaking mode (e.g., heteroskedastic per-channel variances) and persist its parameters in `generator_config.json`.
+    - _Requirements: 1.1, 1.2_
+  - [ ] 2.2 Implement anomaly test set generation and labels
+    - Implement high/low anomaly generation by applying \(\pm\Delta\) shifts to configured coordinates for both `shift_mode="single_channel"` and `shift_mode="subset"`.
+    - Return tensors for `x_test_anomaly`, `labels_type`, `labels_channel`, and (when applicable) `labels_mask`.
+    - _Requirements: 1.3, 1.4, 1.5_
+  - [ ] 2.3 Implement dataset export helpers
+    - Add an export helper that writes `generator_config.json`, `anomaly_manifest.json`, and a small `sampled_data.pt` preview under `data/` inside the run directory.
+    - _Requirements: 1.6_
+  - [ ] 2.4 Implement memory-safe anomaly evaluation mode
+    - Add an option to avoid materializing the full anomaly tensor when \(N\) and per-channel counts are large (e.g., generate per-channel/per-sign batches and score/evaluate via iteration).
+    - _Requirements: 1.8_
+
+- [ ] 3. Implement training orchestration under a latent budget
+  - [ ] 3.1 Implement model instantiation helper for SAE variants
+    - Create `sgnsae/experiments/directional_deviation/training.py` and implement an `_instantiate_model` helper mirroring `sgnsae/experiments/polarity_dial/training.py` for `SAE` and `GatedSAE`.
+    - Enforce width `d_hidden` from the variant config and ensure the model is moved to the resolved device.
+    - _Requirements: 2.1_
+  - [ ] 3.2 Implement training loop and metrics capture
+    - Implement `run_training_for_variant` that trains on normal-only training data by default and records epoch-wise metrics (including `loss_aux` for gated models).
+    - Add an explicit config flag to optionally train on a normal+anomaly mixture and persist that choice in the run config.
+    - _Requirements: 2.2, 2.3, 2.4_
+  - [ ] 3.3 Persist trained model and training artifacts
+    - Save `model.pt`, `model_config.json`, and `training_metrics.json` under `models/<model_name>/`.
+    - _Requirements: 2.4, 5.1_
+
+- [ ] 4. Implement detection signal extraction, calibration, and scoring
+  - [ ] 4.1 Implement detection/evidence extraction for Sign-Aware vs baseline scoring modes
+    - Create `sgnsae/experiments/directional_deviation/scoring.py` and implement `extract_detection_signal(model, x)` returning a `(batch, d_hidden)` tensor.
+    - Use `output["pi_gate"][0]` for gated models; for `SAE`, compute encoder pre-activations consistent with `SAE.forward` prior to the nonlinearity.
+    - Add baseline evidence extraction using one-sided signals (e.g., post-nonlinearity activations) and implement decoder-based latent-to-direction assignment for baseline directional scoring.
+    - _Requirements: 3.1, 3.3_
+  - [ ] 4.2 Implement per-latent quantile thresholds \(\tau_i^+\), \(\tau_i^-\)
+    - Compute per-latent thresholds from normal validation signals using the configured quantile (default `0.99`) for \(\pi_i\) and \(-\pi_i\).
+    - Persist thresholds under `models/<model_name>/thresholds/` and validate minimum validation sample count.
+    - _Requirements: 3.2, 3.7_
+  - [ ] 4.3 Implement directional scores and fixed-FPR score thresholds
+    - Implement `Score_high(x)` and `Score_low(x)` as in Protocol B using per-latent thresholds.
+    - Calibrate per-direction score thresholds `theta_high`, `theta_low` on normal validation data to match the configured FPR (default `0.01`) and persist them to JSON.
+    - _Requirements: 3.1, 3.4_
+  - [ ] 4.4 Persist threshold metadata distinguishing learned vs calibrated thresholds
+    - Ensure artifacts clearly separate learned model thresholds (e.g., `delta_plus/delta_minus`) from calibrated evaluation thresholds (`tau_*` / evidence thresholds), including machine-readable metadata.
+    - _Requirements: 3.8_
+
+- [ ] 5. Implement evaluation metrics (directional recall and coverage)
+  - [ ] 5.1 Implement Directional Recall @ Fixed FPR evaluation
+    - Create `sgnsae/experiments/directional_deviation/evaluation.py` and compute `recall_high` and `recall_low` on labeled anomaly test sets using `theta_high`/`theta_low`.
+    - Compute and report the achieved FPR on a held-out normal test-normal set as a sanity check.
+    - _Requirements: 3.5_
+  - [ ] 5.2 Implement per-channel directional recall and “both-directions covered” statistic
+    - For `shift_mode="single_channel"`, compute per-channel recall and an aggregate count/fraction of channels where both recalls exceed a configurable target.
+    - _Requirements: 3.6_
+  - [ ] 5.3 Persist evaluation artifacts and comparison-ready summaries
+    - Write `evaluation.json` per model variant and a run-level `comparison_summary.json` that juxtaposes directional recall and coverage across variants.
+    - Ensure partial artifacts are persisted if evaluation cannot complete safely (e.g., record `null` metrics).
+    - _Requirements: 5.1, 5.2, 5.3_
+  - [ ] 5.4 Make evaluation compatible with streaming anomaly mode
+    - Ensure scoring and recall computations operate in batches over anomaly samples and do not require a single huge anomaly tensor.
+    - _Requirements: 1.8_
+
+- [ ] 6. Implement experiment runner with optional width sweep
+  - [ ] 6.1 Implement single-run orchestration
+    - Create `sgnsae/experiments/directional_deviation/runner.py` to create the run directory, persist `config.json`, generate data, train models, calibrate thresholds, and run evaluation for each model variant.
+    - _Requirements: 2.5, 4.2, 5.1_
+  - [ ] 6.2 Implement width sweep and collation
+    - If `width_sweep` is provided, run separate sub-runs per width \(H\) (overriding each model’s `d_hidden`) and collate results into a single comparison artifact under the parent run directory.
+    - _Requirements: 4.4_
+  - [ ] 6.3 Implement multi-seed orchestration and aggregation (optional but recommended)
+    - If `seeds` is provided, run separate sub-runs per seed and collate mean/std metrics into the comparison artifact(s).
+    - _Requirements: 4.5_
+
+- [ ] 7. Add minimal plotting helpers (optional but recommended)
+  - [ ] 7.1 Plot recall/coverage vs width and score distributions
+    - Create `sgnsae/experiments/directional_deviation/plotting.py` to generate deterministic PNG plots from JSON/Tensor artifacts.
+    - _Requirements: 5.1, 5.2_
+
+- [ ] 8. Add tests for Protocol B
+  - [ ] 8.1 Test synthetic data generation determinism and anomaly correctness
+    - Add `unittest` tests that verify shapes, determinism (same seed), and that anomaly samples apply exactly the intended \(\pm\Delta\) shifts and labels.
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+  - [ ] 8.2 Test calibration and scoring math
+    - Test per-latent quantile thresholding on a small fixed tensor; test `Score_high`/`Score_low` behavior around thresholds.
+    - _Requirements: 3.1, 3.2, 3.4, 3.7_
+  - [ ] 8.3 Test directional recall at fixed FPR in controlled cases
+    - Construct controlled tensors where anomalies are guaranteed to exceed thresholds and assert recall \(= 1.0\); verify FPR calibration matches the configured target within tolerance for sufficiently large samples.
+    - _Requirements: 3.4, 3.5_
+  - [ ] 8.4 Add a smoke test for the CLI runner on a tiny config
+    - Add a tiny debug config under `configs/` and a test that runs the runner function directly (not via subprocess) and asserts expected artifacts are created and non-empty.
+    - _Requirements: 4.1, 4.2, 5.1_
+  - [ ] 8.5 Add a baseline leakage-prevention test
+    - Ensure baseline-mode scoring cannot use signed pre-activations to detect both directions with a single latent.
+    - _Requirements: 3.3_
+  - [ ] 8.6 Add a streaming-mode smoke test (if implemented)
+    - Run a tiny config with `anomaly_eval_mode="stream"` and assert evaluation completes and artifacts are written.
+    - _Requirements: 1.8_
