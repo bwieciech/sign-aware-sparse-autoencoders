@@ -186,6 +186,28 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationDataConfig(**base_kwargs)
 
+    def test_data_config_rejects_invalid_train_anomaly_fraction(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": 1,
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 4,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{**base_kwargs, "train_anomaly_fraction": -0.1}
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{**base_kwargs, "train_anomaly_fraction": 1.1}
+            )
+
     def test_threshold_config_rejects_invalid_quantile_and_fpr(self) -> None:
         # given
         base_kwargs = {
@@ -213,7 +235,9 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 **{**base_kwargs, "score_fpr": 1.0}
             )
 
-    def test_experiment_config_rejects_d_hidden_not_less_than_num_channels(self) -> None:
+    def test_experiment_config_rejects_d_hidden_not_less_than_num_channels(
+        self,
+    ) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_config = self._build_base_raw_config(tmpdir)
@@ -226,7 +250,9 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
             with self.assertRaises(ValueError):
                 config_module.load_experiment_config(config_path)
 
-    def test_experiment_config_allows_oversized_model_width_when_width_sweep_present(self) -> None:
+    def test_experiment_config_allows_oversized_model_width_when_width_sweep_present(
+        self,
+    ) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_config = self._build_base_raw_config(tmpdir)
@@ -345,7 +371,9 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
 
         # when & then
         with self.assertRaises(ValueError):
-            _ = config_module.DirectionalDeviationAnomalyConfig(**{**base_kwargs, "delta": 0.0})
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **{**base_kwargs, "delta": 0.0}
+            )
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationAnomalyConfig(
                 delta=2.0, shift_mode="subset"  # type: ignore[arg-type]
@@ -369,12 +397,16 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 delta=2.0, shift_mode="single_channel", channels_to_evaluate=[]
             )
 
-    def test_experiment_config_rejects_subset_size_greater_than_num_channels(self) -> None:
+    def test_experiment_config_rejects_subset_size_greater_than_num_channels(
+        self,
+    ) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_config = self._build_base_raw_config(tmpdir)
             raw_config["anomaly"]["shift_mode"] = "subset"
-            raw_config["anomaly"]["subset_size"] = raw_config["data"]["num_channels"] + 1
+            raw_config["anomaly"]["subset_size"] = (
+                raw_config["data"]["num_channels"] + 1
+            )
             config_path = os.path.join(tmpdir, "config.json")
             with open(config_path, "w") as f:
                 json.dump(raw_config, f)
@@ -387,7 +419,10 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_config = self._build_base_raw_config(tmpdir)
-            raw_config["anomaly"]["channels_to_evaluate"] = [0, raw_config["data"]["num_channels"]]
+            raw_config["anomaly"]["channels_to_evaluate"] = [
+                0,
+                raw_config["data"]["num_channels"],
+            ]
             config_path = os.path.join(tmpdir, "config.json")
             with open(config_path, "w") as f:
                 json.dump(raw_config, f)
@@ -407,7 +442,9 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
             with self.assertRaises(ValueError):
                 config_module.load_experiment_config(config_path)
 
-    def test_experiment_config_rejects_num_val_below_min_validation_samples(self) -> None:
+    def test_experiment_config_rejects_num_val_below_min_validation_samples(
+        self,
+    ) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_config = self._build_base_raw_config(tmpdir)
@@ -438,7 +475,9 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
 
         # when & then
         with self.assertRaises(ValueError):
-            _ = config_module.DirectionalDeviationModelVariantConfig(name="", **base_kwargs)
+            _ = config_module.DirectionalDeviationModelVariantConfig(
+                name="", **base_kwargs
+            )
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationModelVariantConfig(
                 name="model", **{**base_kwargs, "sae_class": "Invalid"}  # type: ignore[arg-type]

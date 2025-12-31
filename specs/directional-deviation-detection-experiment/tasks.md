@@ -41,16 +41,16 @@
     - Add an option to avoid materializing the full anomaly tensor when \(N\) and per-channel counts are large (e.g., generate per-channel/per-sign batches and score/evaluate via iteration).
     - _Requirements: 1.8_
 
-- [ ] 3. Implement training orchestration under a latent budget
-  - [ ] 3.1 Implement model instantiation helper for SAE variants
+- [x] 3. Implement training orchestration under a latent budget
+  - [x] 3.1 Implement model instantiation helper for SAE variants
     - Create `sgnsae/experiments/directional_deviation/training.py` and implement an `_instantiate_model` helper mirroring `sgnsae/experiments/polarity_dial/training.py` for `SAE` and `GatedSAE`.
     - Enforce width `d_hidden` from the variant config and ensure the model is moved to the resolved device.
     - _Requirements: 2.1_
-  - [ ] 3.2 Implement training loop and metrics capture
+  - [x] 3.2 Implement training loop and metrics capture
     - Implement `run_training_for_variant` that trains on normal-only training data by default and records epoch-wise metrics (including `loss_aux` for gated models).
     - Add an explicit config flag to optionally train on a normal+anomaly mixture and persist that choice in the run config.
     - _Requirements: 2.2, 2.3, 2.4_
-  - [ ] 3.3 Persist trained model and training artifacts
+  - [x] 3.3 Persist trained model and training artifacts
     - Save `model.pt`, `model_config.json`, and `training_metrics.json` under `models/<model_name>/`.
     - _Requirements: 2.4, 5.1_
 

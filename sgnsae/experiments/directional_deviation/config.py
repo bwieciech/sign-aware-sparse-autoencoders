@@ -27,11 +27,15 @@ def _validate_open_unit_interval(value: float, name: str) -> None:
 
 def _validate_adam_betas(adam_betas: Tuple[float, float]) -> None:
     if len(adam_betas) != 2:
-        raise ValueError(f"adam_betas must contain exactly two values; received {adam_betas}.")
+        raise ValueError(
+            f"adam_betas must contain exactly two values; received {adam_betas}."
+        )
     beta1, beta2 = adam_betas
     for beta_value, beta_name in zip((beta1, beta2), ("beta1", "beta2")):
         if not 0.0 < beta_value < 1.0:
-            raise ValueError(f"{beta_name} must be within (0, 1); received {beta_value}.")
+            raise ValueError(
+                f"{beta_name} must be within (0, 1); received {beta_value}."
+            )
 
 
 @dataclass
@@ -44,9 +48,12 @@ class DirectionalDeviationDataConfig:
     num_test_low_per_channel: int
     num_channels: int
     noise_std: float = 0.0
-    normal_mode: Literal["standard_normal", "heteroskedastic_normal"] = "standard_normal"
+    normal_mode: Literal["standard_normal", "heteroskedastic_normal"] = (
+        "standard_normal"
+    )
     channel_stds: Optional[List[float]] = None
     anomaly_eval_mode: Literal["materialize", "stream"] = "stream"
+    train_anomaly_fraction: float = 0.0
     seeds: Optional[List[int]] = None
 
     def __post_init__(self) -> None:
@@ -68,7 +75,9 @@ class DirectionalDeviationDataConfig:
             )
         if self.normal_mode == "heteroskedastic_normal":
             if self.channel_stds is None:
-                raise ValueError("channel_stds must be provided when normal_mode='heteroskedastic_normal'.")
+                raise ValueError(
+                    "channel_stds must be provided when normal_mode='heteroskedastic_normal'."
+                )
             if len(self.channel_stds) != self.num_channels:
                 raise ValueError(
                     f"channel_stds must have length num_channels={self.num_channels}; "
@@ -80,12 +89,20 @@ class DirectionalDeviationDataConfig:
                         "All channel_stds entries must be positive when normal_mode='heteroskedastic_normal'."
                     )
         elif self.channel_stds is not None:
-            raise ValueError("channel_stds must be omitted when normal_mode='standard_normal'.")
+            raise ValueError(
+                "channel_stds must be omitted when normal_mode='standard_normal'."
+            )
 
         if self.anomaly_eval_mode not in {"materialize", "stream"}:
             raise ValueError(
                 "anomaly_eval_mode must be one of 'materialize' or 'stream'; "
                 f"received {self.anomaly_eval_mode}."
+            )
+
+        if not 0.0 <= self.train_anomaly_fraction <= 1.0:
+            raise ValueError(
+                "train_anomaly_fraction must be within [0, 1]; "
+                f"received {self.train_anomaly_fraction}."
             )
 
         if self.seeds is not None:
@@ -111,13 +128,19 @@ class DirectionalDeviationAnomalyConfig:
             )
         if self.shift_mode == "subset":
             if self.subset_size is None:
-                raise ValueError("subset_size must be provided when shift_mode='subset'.")
+                raise ValueError(
+                    "subset_size must be provided when shift_mode='subset'."
+                )
             _validate_positive_int(self.subset_size, "subset_size")
         elif self.subset_size is not None:
-            raise ValueError("subset_size must be omitted when shift_mode='single_channel'.")
+            raise ValueError(
+                "subset_size must be omitted when shift_mode='single_channel'."
+            )
 
         if self.channels_to_evaluate is not None and not self.channels_to_evaluate:
-            raise ValueError("channels_to_evaluate must be a non-empty list when provided.")
+            raise ValueError(
+                "channels_to_evaluate must be a non-empty list when provided."
+            )
 
 
 @dataclass
@@ -163,9 +186,13 @@ class DirectionalDeviationModelVariantConfig:
         _validate_positive_int(self.num_epochs, "num_epochs")
         _validate_positive_int(self.batch_size, "batch_size")
         if self.sparsity_coeff < 0:
-            raise ValueError(f"sparsity_coeff must be non-negative; received {self.sparsity_coeff}.")
+            raise ValueError(
+                f"sparsity_coeff must be non-negative; received {self.sparsity_coeff}."
+            )
         if self.learning_rate <= 0:
-            raise ValueError(f"learning_rate must be positive; received {self.learning_rate}.")
+            raise ValueError(
+                f"learning_rate must be positive; received {self.learning_rate}."
+            )
         if self.resample_latents_epochs <= 0:
             raise ValueError(
                 f"resample_latents_epochs must be positive; received {self.resample_latents_epochs}."
@@ -193,13 +220,19 @@ class DirectionalDeviationExperimentConfig:
         if not self.output_dir:
             raise ValueError("output_dir must be provided.")
         if self.device not in {"cpu", "cuda", "auto"}:
-            raise ValueError(f"device must be one of 'cpu', 'cuda', or 'auto'; received {self.device}.")
+            raise ValueError(
+                f"device must be one of 'cpu', 'cuda', or 'auto'; received {self.device}."
+            )
         if not self.models:
             raise ValueError("At least one model configuration must be provided.")
         if self.log_every_n_steps <= 0:
-            raise ValueError(f"log_every_n_steps must be positive; received {self.log_every_n_steps}.")
+            raise ValueError(
+                f"log_every_n_steps must be positive; received {self.log_every_n_steps}."
+            )
         if self.log_every_n_epochs <= 0:
-            raise ValueError(f"log_every_n_epochs must be positive; received {self.log_every_n_epochs}.")
+            raise ValueError(
+                f"log_every_n_epochs must be positive; received {self.log_every_n_epochs}."
+            )
 
         if self.data.num_val < self.thresholds.min_validation_samples:
             raise ValueError(
@@ -209,7 +242,9 @@ class DirectionalDeviationExperimentConfig:
 
         if self.anomaly.shift_mode == "subset":
             if self.anomaly.subset_size is None:
-                raise ValueError("subset_size must be provided when shift_mode='subset'.")
+                raise ValueError(
+                    "subset_size must be provided when shift_mode='subset'."
+                )
             if self.anomaly.subset_size > self.data.num_channels:
                 raise ValueError(
                     f"subset_size={self.anomaly.subset_size} must not exceed num_channels={self.data.num_channels}."
@@ -221,7 +256,9 @@ class DirectionalDeviationExperimentConfig:
                     raise ValueError(
                         f"channels_to_evaluate must be within [0, {self.data.num_channels - 1}]; received {channel}."
                     )
-            if len(set(self.anomaly.channels_to_evaluate)) != len(self.anomaly.channels_to_evaluate):
+            if len(set(self.anomaly.channels_to_evaluate)) != len(
+                self.anomaly.channels_to_evaluate
+            ):
                 raise ValueError("channels_to_evaluate must not contain duplicates.")
 
         widths_to_validate = self.width_sweep if self.width_sweep is not None else None
@@ -257,7 +294,9 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
     raw_config = _load_raw_config(path)
     required_sections = ("data", "anomaly", "thresholds", "models")
     if any(section not in raw_config for section in required_sections):
-        raise ValueError("Configuration file must include 'data', 'anomaly', 'thresholds', and 'models' sections.")
+        raise ValueError(
+            "Configuration file must include 'data', 'anomaly', 'thresholds', and 'models' sections."
+        )
     if "output_dir" not in raw_config:
         raise ValueError("Configuration file must include 'output_dir'.")
     if not isinstance(raw_config["models"], list):
@@ -267,7 +306,8 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
     anomaly_config = DirectionalDeviationAnomalyConfig(**raw_config["anomaly"])
     threshold_config = DirectionalDeviationThresholdConfig(**raw_config["thresholds"])
     model_configs = [
-        DirectionalDeviationModelVariantConfig(**model_config) for model_config in raw_config["models"]
+        DirectionalDeviationModelVariantConfig(**model_config)
+        for model_config in raw_config["models"]
     ]
     experiment_config = DirectionalDeviationExperimentConfig(
         output_dir=raw_config["output_dir"],
@@ -287,7 +327,9 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
     return experiment_config
 
 
-def save_experiment_config(config: DirectionalDeviationExperimentConfig, path: str) -> None:
+def save_experiment_config(
+    config: DirectionalDeviationExperimentConfig, path: str
+) -> None:
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
