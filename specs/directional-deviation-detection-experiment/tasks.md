@@ -24,20 +24,20 @@
     - Wire the script to call a runner function and print the output run directory.
     - _Requirements: 4.1, 4.2_
 
-- [ ] 2. Implement Protocol B synthetic data generation
-  - [ ] 2.1 Implement normal data generation with deterministic seeding
+- [x] 2. Implement Protocol B synthetic data generation
+  - [x] 2.1 Implement normal data generation with deterministic seeding
     - Create `sgnsae/experiments/directional_deviation/data.py` and implement normal train/val/test-normal splits sampled IID from \(\mathcal{N}(0, I)\) componentwise.
     - Ensure all splits are deterministic for a given seed and device.
     - Implement optional symmetry-breaking mode (e.g., heteroskedastic per-channel variances) and persist its parameters in `generator_config.json`.
     - _Requirements: 1.1, 1.2_
-  - [ ] 2.2 Implement anomaly test set generation and labels
+  - [x] 2.2 Implement anomaly test set generation and labels
     - Implement high/low anomaly generation by applying \(\pm\Delta\) shifts to configured coordinates for both `shift_mode="single_channel"` and `shift_mode="subset"`.
     - Return tensors for `x_test_anomaly`, `labels_type`, `labels_channel`, and (when applicable) `labels_mask`.
     - _Requirements: 1.3, 1.4, 1.5_
-  - [ ] 2.3 Implement dataset export helpers
+  - [x] 2.3 Implement dataset export helpers
     - Add an export helper that writes `generator_config.json`, `anomaly_manifest.json`, and a small `sampled_data.pt` preview under `data/` inside the run directory.
     - _Requirements: 1.6_
-  - [ ] 2.4 Implement memory-safe anomaly evaluation mode
+  - [x] 2.4 Implement memory-safe anomaly evaluation mode
     - Add an option to avoid materializing the full anomaly tensor when \(N\) and per-channel counts are large (e.g., generate per-channel/per-sign batches and score/evaluate via iteration).
     - _Requirements: 1.8_
 
@@ -105,7 +105,7 @@
     - _Requirements: 5.1, 5.2_
 
 - [ ] 8. Add tests for Protocol B
-  - [ ] 8.1 Test synthetic data generation determinism and anomaly correctness
+  - [x] 8.1 Test synthetic data generation determinism and anomaly correctness
     - Add `unittest` tests that verify shapes, determinism (same seed), and that anomaly samples apply exactly the intended \(\pm\Delta\) shifts and labels.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
   - [ ] 8.2 Test calibration and scoring math
