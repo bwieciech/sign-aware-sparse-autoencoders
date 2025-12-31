@@ -191,6 +191,19 @@ not marked with `+` or `-`, and therefore should not be changed.
 When asked to apply diffs, **do not change other lines**,  even if the change would break code, for example in another
 file. You will likely be asked to make these changes in subsequent diffs. Stick to what is exactly outlined in the diff.
 
+When asked to commit code, always provide a title and concise description of the key changes made on a high level. If
+you are working based on a list of tasks, always mention which tasks you have completed in the commit message using
+the following format (hypothetical example where tasks 2.2, 2.3 and 2.4 were completed):
+```
+<title>
+
+<description>
+
+Tasks: 2.2, 2.3, 2.4
+```
+
+If you are working based on a list of tasks, always mark each task as complete once you finish it.
+
 ## Python
 
 ### Guidelines

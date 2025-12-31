@@ -1,14 +1,14 @@
 # Implementation Plan
 
-- [ ] 0. Decide and lock down baseline directional scoring (prevents “two-sided evidence” leakage)
+- [x] 0. Decide and lock down baseline directional scoring (prevents “two-sided evidence” leakage)
   - [x] 0.1 Update Protocol B specs to explicitly forbid baseline scoring that uses both tails of raw signed pre-activations from a single latent
     - Ensure baseline scoring uses one-sided evidence signals (e.g., post-nonlinearity activations) and directional partitioning via decoder geometry.
     - _Requirements: 3.3, 3.8_
   - [x] 0.2 Add a unit test that fails if baseline scoring can detect both directions using a single latent via signed pre-activations
     - _Requirements: 3.3_
 
-- [ ] 1. Add Protocol B config + CLI entrypoint
-  - [ ] 1.1 Implement Protocol B configuration models
+- [x] 1. Add Protocol B config + CLI entrypoint
+  - [x] 1.1 Implement Protocol B configuration models
     - Create `sgnsae/experiments/directional_deviation/config.py` with dataclass configs from the design (`DirectionalDeviationDataConfig`, `DirectionalDeviationAnomalyConfig`, `DirectionalDeviationThresholdConfig`, `DirectionalDeviationModelVariantConfig`, `DirectionalDeviationExperimentConfig`).
     - Implement config validation in `__post_init__` (counts positive, probabilities/quantiles/FPR in valid ranges, width constraints `d_hidden < num_channels` for Protocol B default mode).
     - Implement JSON (and optionally YAML) config load helpers mirroring `sgnsae/experiments/polarity_dial/config.py`.
@@ -19,7 +19,7 @@
       - optional deterministic-algorithms flag,
       - anomaly evaluation mode (`materialize` vs `stream`).
     - _Requirements: 4.1, 4.2_
-  - [ ] 1.2 Implement CLI script to run Protocol B
+  - [x] 1.2 Implement CLI script to run Protocol B
     - Add `sgnsae/scripts/run_directional_deviation_experiment.py` with `argparse` for `--config-path`.
     - Wire the script to call a runner function and print the output run directory.
     - _Requirements: 4.1, 4.2_

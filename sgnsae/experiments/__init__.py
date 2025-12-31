@@ -1,1 +1,1 @@
-__all__ = ["polarity_dial"]
+__all__ = ["polarity_dial", "directional_deviation"]
