@@ -25,6 +25,11 @@ def _validate_open_unit_interval(value: float, name: str) -> None:
         raise ValueError(f"{name} must be within (0, 1); received {value}.")
 
 
+def _validate_closed_unit_interval(value: float, name: str) -> None:
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be within [0, 1]; received {value}.")
+
+
 def _validate_adam_betas(adam_betas: Tuple[float, float]) -> None:
     if len(adam_betas) != 2:
         raise ValueError(
@@ -211,6 +216,7 @@ class DirectionalDeviationExperimentConfig:
     width_sweep: Optional[List[int]] = None
     run_id: Optional[str] = None
     verbose: bool = True
+    coverage_recall_target: float = 0.8
     log_every_n_steps: int = 25
     log_every_n_epochs: int = 1
     wandb_project: Optional[str] = None
@@ -233,6 +239,9 @@ class DirectionalDeviationExperimentConfig:
             raise ValueError(
                 f"log_every_n_epochs must be positive; received {self.log_every_n_epochs}."
             )
+        _validate_closed_unit_interval(
+            self.coverage_recall_target, "coverage_recall_target"
+        )
 
         if self.data.num_val < self.thresholds.min_validation_samples:
             raise ValueError(
@@ -319,6 +328,7 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
         width_sweep=raw_config.get("width_sweep"),
         run_id=raw_config.get("run_id"),
         verbose=raw_config.get("verbose", True),
+        coverage_recall_target=raw_config.get("coverage_recall_target", 0.8),
         log_every_n_steps=raw_config.get("log_every_n_steps", 25),
         log_every_n_epochs=raw_config.get("log_every_n_epochs", 1),
         wandb_project=raw_config.get("wandb_project"),

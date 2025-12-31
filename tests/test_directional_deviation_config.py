@@ -458,6 +458,30 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
             with self.assertRaises(ValueError):
                 config_module.load_experiment_config(config_path)
 
+    def test_experiment_config_rejects_invalid_coverage_recall_target(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_base_raw_config(tmpdir)
+            raw_config["coverage_recall_target"] = -0.1
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = config_module.load_experiment_config(config_path)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_base_raw_config(tmpdir)
+            raw_config["coverage_recall_target"] = 1.1
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = config_module.load_experiment_config(config_path)
+
     def test_model_variant_config_validation_errors(self) -> None:
         # given
         base_kwargs = {

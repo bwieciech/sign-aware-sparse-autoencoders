@@ -72,19 +72,19 @@
     - Ensure artifacts clearly separate learned model thresholds (e.g., `delta_plus/delta_minus`) from calibrated evaluation thresholds (`tau_*` / evidence thresholds), including machine-readable metadata.
     - _Requirements: 3.8_
 
-- [ ] 5. Implement evaluation metrics (directional recall and coverage)
-  - [ ] 5.1 Implement Directional Recall @ Fixed FPR evaluation
+- [x] 5. Implement evaluation metrics (directional recall and coverage)
+  - [x] 5.1 Implement Directional Recall @ Fixed FPR evaluation
     - Create `sgnsae/experiments/directional_deviation/evaluation.py` and compute `recall_high` and `recall_low` on labeled anomaly test sets using `theta_high`/`theta_low`.
     - Compute and report the achieved FPR on a held-out normal test-normal set as a sanity check.
     - _Requirements: 3.5_
-  - [ ] 5.2 Implement per-channel directional recall and “both-directions covered” statistic
+  - [x] 5.2 Implement per-channel directional recall and “both-directions covered” statistic
     - For `shift_mode="single_channel"`, compute per-channel recall and an aggregate count/fraction of channels where both recalls exceed a configurable target.
     - _Requirements: 3.6_
-  - [ ] 5.3 Persist evaluation artifacts and comparison-ready summaries
+  - [x] 5.3 Persist evaluation artifacts and comparison-ready summaries
     - Write `evaluation.json` per model variant and a run-level `comparison_summary.json` that juxtaposes directional recall and coverage across variants.
     - Ensure partial artifacts are persisted if evaluation cannot complete safely (e.g., record `null` metrics).
     - _Requirements: 5.1, 5.2, 5.3_
-  - [ ] 5.4 Make evaluation compatible with streaming anomaly mode
+  - [x] 5.4 Make evaluation compatible with streaming anomaly mode
     - Ensure scoring and recall computations operate in batches over anomaly samples and do not require a single huge anomaly tensor.
     - _Requirements: 1.8_
 
