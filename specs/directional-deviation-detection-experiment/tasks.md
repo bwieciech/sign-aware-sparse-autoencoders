@@ -54,21 +54,21 @@
     - Save `model.pt`, `model_config.json`, and `training_metrics.json` under `models/<model_name>/`.
     - _Requirements: 2.4, 5.1_
 
-- [ ] 4. Implement detection signal extraction, calibration, and scoring
-  - [ ] 4.1 Implement detection/evidence extraction for Sign-Aware vs baseline scoring modes
+- [x] 4. Implement detection signal extraction, calibration, and scoring
+  - [x] 4.1 Implement detection/evidence extraction for Sign-Aware vs baseline scoring modes
     - Create `sgnsae/experiments/directional_deviation/scoring.py` and implement `extract_detection_signal(model, x)` returning a `(batch, d_hidden)` tensor.
     - Use `output["pi_gate"][0]` for gated models; for `SAE`, compute encoder pre-activations consistent with `SAE.forward` prior to the nonlinearity.
     - Add baseline evidence extraction using one-sided signals (e.g., post-nonlinearity activations) and implement decoder-based latent-to-direction assignment for baseline directional scoring.
     - _Requirements: 3.1, 3.3_
-  - [ ] 4.2 Implement per-latent quantile thresholds \(\tau_i^+\), \(\tau_i^-\)
+  - [x] 4.2 Implement per-latent quantile thresholds \(\tau_i^+\), \(\tau_i^-\)
     - Compute per-latent thresholds from normal validation signals using the configured quantile (default `0.99`) for \(\pi_i\) and \(-\pi_i\).
     - Persist thresholds under `models/<model_name>/thresholds/` and validate minimum validation sample count.
     - _Requirements: 3.2, 3.7_
-  - [ ] 4.3 Implement directional scores and fixed-FPR score thresholds
+  - [x] 4.3 Implement directional scores and fixed-FPR score thresholds
     - Implement `Score_high(x)` and `Score_low(x)` as in Protocol B using per-latent thresholds.
     - Calibrate per-direction score thresholds `theta_high`, `theta_low` on normal validation data to match the configured FPR (default `0.01`) and persist them to JSON.
     - _Requirements: 3.1, 3.4_
-  - [ ] 4.4 Persist threshold metadata distinguishing learned vs calibrated thresholds
+  - [x] 4.4 Persist threshold metadata distinguishing learned vs calibrated thresholds
     - Ensure artifacts clearly separate learned model thresholds (e.g., `delta_plus/delta_minus`) from calibrated evaluation thresholds (`tau_*` / evidence thresholds), including machine-readable metadata.
     - _Requirements: 3.8_
 
@@ -108,7 +108,7 @@
   - [x] 8.1 Test synthetic data generation determinism and anomaly correctness
     - Add `unittest` tests that verify shapes, determinism (same seed), and that anomaly samples apply exactly the intended \(\pm\Delta\) shifts and labels.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
-  - [ ] 8.2 Test calibration and scoring math
+  - [x] 8.2 Test calibration and scoring math
     - Test per-latent quantile thresholding on a small fixed tensor; test `Score_high`/`Score_low` behavior around thresholds.
     - _Requirements: 3.1, 3.2, 3.4, 3.7_
   - [ ] 8.3 Test directional recall at fixed FPR in controlled cases
