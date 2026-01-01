@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import torch
@@ -19,6 +20,7 @@ from sgnsae.experiments.directional_deviation.data import (
     generate_anomaly_test_data,
     generate_normal_data,
 )
+from sgnsae.experiments.directional_deviation import data as data_module
 
 
 def _iterate_batch_counts(total_count: int, batch_size: int) -> Iterator[int]:
@@ -104,7 +106,9 @@ def _build_expected_single_channel_anomalies(
             (LABEL_TYPE_LOW, -delta, data_config.num_test_low_per_channel),
         ):
             for batch_count in _iterate_batch_counts(count, batch_size):
-                batch = _sample_expected_normal_split(batch_count, data_config, generator)
+                batch = _sample_expected_normal_split(
+                    batch_count, data_config, generator
+                )
                 batch[:, channel] = batch[:, channel] + shift
                 x_batches.append(batch.to(device))
                 labels_type_batches.append(
@@ -277,15 +281,21 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
         )
 
         # then
-        expected_count = 2 * (data_config.num_test_high_per_channel + data_config.num_test_low_per_channel)
+        expected_count = 2 * (
+            data_config.num_test_high_per_channel + data_config.num_test_low_per_channel
+        )
         self.assertEqual(anomaly_data["x_test_anomaly"].shape, (expected_count, 6))
         self.assertEqual(anomaly_data["labels_type"].shape, (expected_count,))
         self.assertEqual(anomaly_data["labels_channel"].shape, (expected_count,))
         self.assertNotIn("labels_mask", anomaly_data)
 
         manifest = anomaly_data["anomaly_manifest"]
-        self.assertEqual(manifest["counts"]["high"], 2 * data_config.num_test_high_per_channel)
-        self.assertEqual(manifest["counts"]["low"], 2 * data_config.num_test_low_per_channel)
+        self.assertEqual(
+            manifest["counts"]["high"], 2 * data_config.num_test_high_per_channel
+        )
+        self.assertEqual(
+            manifest["counts"]["low"], 2 * data_config.num_test_low_per_channel
+        )
 
         sample_seed = int(manifest["seed_plan"]["sample_seed"])
         channels_to_evaluate = list(manifest["channels_to_evaluate"])
@@ -298,9 +308,15 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             device=self.device,
         )
 
-        self.assertTrue(torch.equal(anomaly_data["x_test_anomaly"], expected["x_test_anomaly"]))
-        self.assertTrue(torch.equal(anomaly_data["labels_type"], expected["labels_type"]))
-        self.assertTrue(torch.equal(anomaly_data["labels_channel"], expected["labels_channel"]))
+        self.assertTrue(
+            torch.equal(anomaly_data["x_test_anomaly"], expected["x_test_anomaly"])
+        )
+        self.assertTrue(
+            torch.equal(anomaly_data["labels_type"], expected["labels_type"])
+        )
+        self.assertTrue(
+            torch.equal(anomaly_data["labels_channel"], expected["labels_channel"])
+        )
 
     def test_generate_anomaly_test_data_stream_materialization_matches_materialize(
         self,
@@ -341,15 +357,25 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
 
         # then
         self.assertTrue(
-            torch.equal(materialized_stream["x_test_anomaly"], materialize_data["x_test_anomaly"])
+            torch.equal(
+                materialized_stream["x_test_anomaly"],
+                materialize_data["x_test_anomaly"],
+            )
         )
         self.assertTrue(
-            torch.equal(materialized_stream["labels_type"], materialize_data["labels_type"])
+            torch.equal(
+                materialized_stream["labels_type"], materialize_data["labels_type"]
+            )
         )
         self.assertTrue(
-            torch.equal(materialized_stream["labels_channel"], materialize_data["labels_channel"])
+            torch.equal(
+                materialized_stream["labels_channel"],
+                materialize_data["labels_channel"],
+            )
         )
-        self.assertEqual(stream_data["anomaly_manifest"], materialize_data["anomaly_manifest"])
+        self.assertEqual(
+            stream_data["anomaly_manifest"], materialize_data["anomaly_manifest"]
+        )
 
     def test_generate_anomaly_test_data_subset_stream_and_materialize_match_expected(
         self,
@@ -420,33 +446,51 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             data_config=materialize_data_config,
             anomaly_config=anomaly_config,
             subset_indices=subset_indices,
-            sample_seed=int(materialize_data["anomaly_manifest"]["seed_plan"]["sample_seed"]),
+            sample_seed=int(
+                materialize_data["anomaly_manifest"]["seed_plan"]["sample_seed"]
+            ),
             batch_size=batch_size,
             device=self.device,
         )
 
-        self.assertTrue(torch.equal(materialize_data["x_test_anomaly"], expected["x_test_anomaly"]))
-        self.assertTrue(torch.equal(materialize_data["labels_type"], expected["labels_type"]))
-        self.assertTrue(torch.equal(materialize_data["labels_channel"], expected["labels_channel"]))
-        self.assertTrue(torch.equal(materialize_data["labels_mask"], expected["labels_mask"]))
+        self.assertTrue(
+            torch.equal(materialize_data["x_test_anomaly"], expected["x_test_anomaly"])
+        )
+        self.assertTrue(
+            torch.equal(materialize_data["labels_type"], expected["labels_type"])
+        )
+        self.assertTrue(
+            torch.equal(materialize_data["labels_channel"], expected["labels_channel"])
+        )
+        self.assertTrue(
+            torch.equal(materialize_data["labels_mask"], expected["labels_mask"])
+        )
 
         self.assertTrue(
             torch.equal(
-                materialize_data["x_test_anomaly"], materialized_stream["x_test_anomaly"]
+                materialize_data["x_test_anomaly"],
+                materialized_stream["x_test_anomaly"],
             )
-        )
-        self.assertTrue(
-            torch.equal(materialize_data["labels_type"], materialized_stream["labels_type"])
         )
         self.assertTrue(
             torch.equal(
-                materialize_data["labels_channel"], materialized_stream["labels_channel"]
+                materialize_data["labels_type"], materialized_stream["labels_type"]
             )
         )
         self.assertTrue(
-            torch.equal(materialize_data["labels_mask"], materialized_stream["labels_mask"])
+            torch.equal(
+                materialize_data["labels_channel"],
+                materialized_stream["labels_channel"],
+            )
         )
-        self.assertEqual(stream_data["anomaly_manifest"], materialize_data["anomaly_manifest"])
+        self.assertTrue(
+            torch.equal(
+                materialize_data["labels_mask"], materialized_stream["labels_mask"]
+            )
+        )
+        self.assertEqual(
+            stream_data["anomaly_manifest"], materialize_data["anomaly_manifest"]
+        )
 
     def test_export_data_summary_writes_expected_files_for_stream_anomalies(
         self,
@@ -464,9 +508,13 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             normal_mode="standard_normal",
             anomaly_eval_mode="stream",
         )
-        anomaly_config = DirectionalDeviationAnomalyConfig(delta=4.0, shift_mode="single_channel")
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=4.0, shift_mode="single_channel"
+        )
         normal_data = generate_normal_data(data_config, self.device)
-        anomaly_data = generate_anomaly_test_data(data_config, anomaly_config, self.device, batch_size=4)
+        anomaly_data = generate_anomaly_test_data(
+            data_config, anomaly_config, self.device, batch_size=4
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # when
@@ -482,8 +530,12 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
 
             # then
             data_dir = os.path.join(tmpdir, "data")
-            self.assertTrue(os.path.exists(os.path.join(data_dir, "generator_config.json")))
-            self.assertTrue(os.path.exists(os.path.join(data_dir, "anomaly_manifest.json")))
+            self.assertTrue(
+                os.path.exists(os.path.join(data_dir, "generator_config.json"))
+            )
+            self.assertTrue(
+                os.path.exists(os.path.join(data_dir, "anomaly_manifest.json"))
+            )
             self.assertTrue(os.path.exists(os.path.join(data_dir, "sampled_data.pt")))
 
             with open(os.path.join(data_dir, "generator_config.json"), "r") as f:
@@ -527,7 +579,9 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             channels_to_evaluate=[1, 2, 4],
         )
         normal_data = generate_normal_data(data_config, self.device)
-        anomaly_data = generate_anomaly_test_data(data_config, anomaly_config, self.device, batch_size=8)
+        anomaly_data = generate_anomaly_test_data(
+            data_config, anomaly_config, self.device, batch_size=8
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # when
@@ -552,7 +606,164 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             self.assertEqual(sampled["labels_channel"].shape, (7,))
             self.assertEqual(sampled["labels_mask"].shape, (7, 2))
 
+    def test_export_data_summary_includes_labels_mask_for_stream_subset_anomalies(
+        self,
+    ) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=3,
+            num_train=10,
+            num_val=11,
+            num_test_normal=12,
+            num_test_high_per_channel=4,
+            num_test_low_per_channel=5,
+            num_channels=6,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=3.0,
+            shift_mode="subset",
+            subset_size=2,
+            channels_to_evaluate=[1, 2, 4],
+        )
+        normal_data = generate_normal_data(data_config, self.device)
+        anomaly_data = generate_anomaly_test_data(
+            data_config, anomaly_config, self.device, batch_size=8
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # when
+            export_data_summary(
+                tmpdir,
+                data_config,
+                anomaly_config,
+                normal_data,
+                anomaly_data,
+                sample_preview_count=4,
+                anomaly_preview_count=7,
+            )
+
+            # then
+            data_dir = os.path.join(tmpdir, "data")
+            sampled = torch.load(os.path.join(data_dir, "sampled_data.pt"))
+            self.assertEqual(sampled["labels_mask"].shape, (7, 2))
+
+    def test_select_subset_indices_raises_for_non_subset_shift_mode(self) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=0,
+            num_train=10,
+            num_val=11,
+            num_test_normal=12,
+            num_test_high_per_channel=4,
+            num_test_low_per_channel=5,
+            num_channels=6,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0, shift_mode="single_channel"
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = data_module._select_subset_indices(data_config, anomaly_config, seed=0)
+
+    def test_select_subset_indices_raises_for_missing_subset_size(self) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=0,
+            num_train=10,
+            num_val=11,
+            num_test_normal=12,
+            num_test_high_per_channel=4,
+            num_test_low_per_channel=5,
+            num_channels=6,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = SimpleNamespace(
+            shift_mode="subset", subset_size=None, channels_to_evaluate=None
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = data_module._select_subset_indices(data_config, anomaly_config, seed=0)
+
+    def test_select_subset_indices_raises_when_subset_size_exceeds_candidates(
+        self,
+    ) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=0,
+            num_train=10,
+            num_val=11,
+            num_test_normal=12,
+            num_test_high_per_channel=4,
+            num_test_low_per_channel=5,
+            num_channels=6,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="subset",
+            subset_size=3,
+            channels_to_evaluate=[0, 1],
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = data_module._select_subset_indices(data_config, anomaly_config, seed=0)
+
+    def test_anomaly_stream_raises_when_subset_indices_missing(self) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=0,
+            num_train=10,
+            num_val=11,
+            num_test_normal=12,
+            num_test_high_per_channel=4,
+            num_test_low_per_channel=5,
+            num_channels=6,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0, shift_mode="subset", subset_size=2
+        )
+        stream = data_module.DirectionalDeviationAnomalyStream(
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+            device=self.device,
+            batch_size=2,
+            channels_to_evaluate=list(range(data_config.num_channels)),
+            subset_indices=None,
+            sample_seed=0,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = next(iter(stream))
+
+    def test_iterate_batch_counts_raises_for_non_positive_batch_size(self) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = list(data_module._iterate_batch_counts(total_count=1, batch_size=0))
+
+    def test_collect_anomaly_preview_raises_for_invalid_anomaly_data(self) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = data_module._collect_anomaly_preview({}, anomaly_preview_count=1)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
-

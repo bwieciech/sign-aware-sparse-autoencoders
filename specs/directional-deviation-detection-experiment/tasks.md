@@ -88,14 +88,14 @@
     - Ensure scoring and recall computations operate in batches over anomaly samples and do not require a single huge anomaly tensor.
     - _Requirements: 1.8_
 
-- [ ] 6. Implement experiment runner with optional width sweep
-  - [ ] 6.1 Implement single-run orchestration
+- [x] 6. Implement experiment runner with optional width sweep
+  - [x] 6.1 Implement single-run orchestration
     - Create `sgnsae/experiments/directional_deviation/runner.py` to create the run directory, persist `config.json`, generate data, train models, calibrate thresholds, and run evaluation for each model variant.
     - _Requirements: 2.5, 4.2, 5.1_
-  - [ ] 6.2 Implement width sweep and collation
+  - [x] 6.2 Implement width sweep and collation
     - If `width_sweep` is provided, run separate sub-runs per width \(H\) (overriding each model’s `d_hidden`) and collate results into a single comparison artifact under the parent run directory.
     - _Requirements: 4.4_
-  - [ ] 6.3 Implement multi-seed orchestration and aggregation (optional but recommended)
+  - [x] 6.3 Implement multi-seed orchestration and aggregation (optional but recommended)
     - If `seeds` is provided, run separate sub-runs per seed and collate mean/std metrics into the comparison artifact(s).
     - _Requirements: 4.5_
 

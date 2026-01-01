@@ -19,13 +19,15 @@ LABEL_TYPE_HIGH = 1
 LABEL_TYPE_LOW = 2
 
 _TORCH_SEED_MODULUS = 2**63
+_NUMPY_SEED_MODULUS = 2**32
 
 
 def set_random_seed(seed: int) -> None:
-    normalized_seed = int(seed % _TORCH_SEED_MODULUS)
-    random.seed(normalized_seed)
-    np.random.seed(normalized_seed)
-    torch.manual_seed(normalized_seed)
+    normalized_torch_seed = int(seed % _TORCH_SEED_MODULUS)
+    normalized_numpy_seed = int(seed % _NUMPY_SEED_MODULUS)
+    random.seed(normalized_torch_seed)
+    np.random.seed(normalized_numpy_seed)
+    torch.manual_seed(normalized_torch_seed)
 
 
 def _normalize_torch_seed(seed: int) -> int:
