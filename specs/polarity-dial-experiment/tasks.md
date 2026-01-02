@@ -224,8 +224,8 @@
     - Add a tiny sweep config (2 sparsity values, 2 `p_plus` values) and assert the aggregated sweep artifacts are produced.
     - _Requirements: 4.5, 6.3, 6.4_
 
-- [ ] 13. Ensure all documented artifacts are produced
-  - [ ] 13.1 Add an end-to-end artifact completeness smoke test
+- [x] 13. Ensure all documented artifacts are produced
+  - [x] 13.1 Add an end-to-end artifact completeness smoke test
     - Run a tiny Protocol A config (single model, 1 epoch) and assert the following files exist:
       - `<run_dir>/config.json`, `<run_dir>/comparison_summary.json`, `<run_dir>/gamma_diff_bar_comparison.png`
       - `<run_dir>/data/generator_config.json`, `<run_dir>/data/feature_directions.pt`, `<run_dir>/data/coefficients_stats.json`, `<run_dir>/data/sampled_data.pt`
@@ -235,4 +235,7 @@
     - Add a second tiny config with sweeps enabled and assert the following run-level sweep artifacts exist:
       - `<run_dir>/mse_vs_l0_tradeoff.json`, `<run_dir>/mse_vs_l0_tradeoff.png`
       - `<run_dir>/asymmetry_sweep_summary.json`, `<run_dir>/asymmetry_sweep_calibration.png`
+    - _Requirements: 4.5, 5.1, 6.3, 6.4_
+  - [x] 13.2 Create missing artifacts
+    - For any of the above files detected as not being produced, add the necessary code to create them as specified in the design.
     - _Requirements: 4.5, 5.1, 6.3, 6.4_
