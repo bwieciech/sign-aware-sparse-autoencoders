@@ -2,7 +2,7 @@
 
 ## Polarity Dial Experiment (Protocol A)
 
-This experiment trains SAEs on a synthetic dataset where each ground-truth feature can appear with either sign, but with asymmetric sign frequency and asymmetric magnitude distributions (LogNormal for positives, Exponential for negatives). The goal is to reproduce the Protocol A results in the paper by running a small set of predefined configs (seeds 0, 1, 2), then confirming that the expected artifacts were produced and that the sign-aware gated model behaves correctly.
+This experiment trains SAEs on a synthetic dataset where each ground-truth feature can appear with either sign, but with asymmetric sign frequency and asymmetric magnitude distributions (LogNormal for positives, Exponential for negatives). The goal is to reproduce the Protocol A results in the paper by running a small set of predefined configs (seeds 0, 1, 2), then confirming that the expected artifacts were produced and that evaluation is axis-aware (so non-negative baselines that learn both \(+u_j\) and \(-u_j\) are credited correctly).
 
 ### 0) Prerequisites
 
@@ -29,6 +29,11 @@ Each config trains three models:
 - `relu_sae` (SAE, non-gated baseline)
 - `gated_sae` (GatedSAE, sign_aware=false)
 - `sign_aware_gated_sae` (GatedSAE, sign_aware=true)
+
+Reviewer-grade baselines (recommended when preparing paper figures):
+- `relu_sae_2x` (SAE, non-gated baseline, width doubled to allow separate \(+u_j\) and \(-u_j\) atoms)
+- `gated_sae_2x` (GatedSAE, sign_aware=false, width doubled)
+- `signed_soft_threshold_sae` (signed-latent baseline that can represent negative coefficients without paired atoms)
 
 All runs write into:
 
@@ -90,6 +95,7 @@ Inside, verify:
 - `model_config.json` (exact model hyperparameters used)
 - `training_metrics.json` (loss curves)
 - `alignment.json` (latent-to-ground-truth matching)
+- `axis_alignment.json` (axis-aware mapping, including two-atom aggregation info for non-negative models)
 - `calibration.json` (per-pair gamma metrics and summary)
 
 Plots (in `<run_dir>/models/<model_name>/plots/`):
@@ -100,12 +106,18 @@ Plots (in `<run_dir>/models/<model_name>/plots/`):
 
 If any of these artifacts are missing, treat the run as incomplete and fix the underlying error before proceeding.
 
+If sweeps are enabled in the config, verify these run-level artifacts exist:
+- `mse_vs_l0_tradeoff.json` and `mse_vs_l0_tradeoff.png` (sparsity-fidelity sweep)
+- `asymmetry_sweep_summary.json` and `asymmetry_sweep_calibration.png` (asymmetry sweep)
+
 ### 4) What results to check (quick interpretation guide)
 
 Open `<run_dir>/comparison_summary.json`. This file contains, for each model, a `summary` object derived from `calibration.json`. At minimum, confirm:
 
 - `sign_aware_gated_sae` produces meaningful calibration on both sides (both `gamma_plus` and `gamma_minus` are present for many matched pairs).
-- `gated_sae` and `relu_sae` are expected to struggle on the negative side unless they effectively allocate separate atoms for the two directions (non-negative latents cannot directly represent negative coefficients along the same axis).
+- `gated_sae` and `relu_sae` may struggle on the negative side at fixed width unless they effectively allocate separate atoms for the two directions.
+- When `relu_sae_2x` or `gated_sae_2x` are enabled, they should improve negative-regime calibration if they learn both \(+u_j\) and \(-u_j\), and the axis-aware evaluation should reflect that via `axis_alignment.json`.
+- Use the per-regime diagnostics in `calibration.json` (`coef_mse_pos/neg`, `pearson_r_pos/neg`, `r2_pos/neg`, and `n_pos/n_neg`) to detect ill-conditioned fits.
 
 Then open `<run_dir>/gamma_diff_bar_comparison.png` and confirm it visually reflects the above behavior for that seed.
 
