@@ -909,8 +909,8 @@ class TestPolarityDialRunnerSweepIntegration(unittest.TestCase):
                 "verbose": False,
                 "sample_preview_count": 2,
                 "max_scatter_points_per_regime": 50,
-                "sparsity_coeff_grid": [0.001],
-                "p_plus_grid": [0.4],
+                "sparsity_coeff_grid": [0.001, 0.01],
+                "p_plus_grid": [0.4, 0.6],
                 "sweeps": {"exponential_lambda_grid": [1.5]},
             }
             with open(config_path, "w") as f:
@@ -952,7 +952,7 @@ class TestPolarityDialRunnerSweepIntegration(unittest.TestCase):
             ), patch(
                 "sgnsae.experiments.polarity_dial.runner.run_asymmetry_sweep",
                 return_value={
-                    "p_plus_grid": [0.4],
+                    "p_plus_grid": [0.4, 0.6],
                     "exponential_lambda_grid": [1.5],
                     "points": [],
                     "models": [],

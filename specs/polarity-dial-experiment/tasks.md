@@ -215,12 +215,12 @@
     - Produce `asymmetry_sweep_calibration.png` showing mean `rel_error_plus` and `rel_error_minus` vs the sweep axis.
     - _Requirements: 4.5, 6.4_
 
-- [ ] 12. Update tests to lock in fairness guarantees
-  - [ ] 12.1 Evaluation correctness tests
+- [x] 12. Update tests to lock in fairness guarantees
+  - [x] 12.1 Evaluation correctness tests
     - Test that abs-cosine alignment matches both `+u_j` and `-u_j` to the same axis.
     - Test non-negative axis aggregation recovers correct \(\gamma_+\) and \(\gamma_-\) on a constructed two-atom baseline.
     - _Requirements: 3.1, 3.2, 3.3_
-  - [ ] 12.2 Sweep smoke tests
+  - [x] 12.2 Sweep smoke tests
     - Add a tiny sweep config (2 sparsity values, 2 `p_plus` values) and assert the aggregated sweep artifacts are produced.
     - _Requirements: 4.5, 6.3, 6.4_
 
