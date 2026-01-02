@@ -33,8 +33,56 @@
       ]
     },
     {
+      "name": "relu_sae_2x",
+      "sae_class": "SAE",
+      "sign_aware": false,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 256,
+      "sparsity_coeff": 0.001,
+      "learning_rate": 0.0001,
+      "num_epochs": 50,
+      "batch_size": 1024,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
       "name": "gated_sae",
       "sae_class": "GatedSAE",
+      "sign_aware": false,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 128,
+      "sparsity_coeff": 0.001,
+      "learning_rate": 0.0001,
+      "num_epochs": 50,
+      "batch_size": 1024,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
+      "name": "gated_sae_2x",
+      "sae_class": "GatedSAE",
+      "sign_aware": false,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 256,
+      "sparsity_coeff": 0.001,
+      "learning_rate": 0.0001,
+      "num_epochs": 50,
+      "batch_size": 1024,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
+      "name": "signed_soft_threshold",
+      "sae_class": "SignedSoftThresholdSAE",
       "sign_aware": false,
       "single_activation_offset": false,
       "reset_activation_offsets_on_resample": false,

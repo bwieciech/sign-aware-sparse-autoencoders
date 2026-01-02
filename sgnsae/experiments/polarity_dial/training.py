@@ -13,7 +13,7 @@ from sgnsae.experiments.polarity_dial.config import (
     PolarityDialExperimentConfig,
     PolarityDialModelVariantConfig,
 )
-from sgnsae.models import SAE, GatedSAE
+from sgnsae.models import GatedSAE, SAE, SignedSoftThresholdSAE
 
 
 def _instantiate_model(
@@ -46,6 +46,14 @@ def _instantiate_model(
             symmetric_magnitude=model_config.symmetric_magnitude,
             reset_activation_offsets_on_resample=model_config.reset_activation_offsets_on_resample,
             single_activation_offset=model_config.single_activation_offset,
+            device=device,
+        )
+    if model_config.sae_class == SignedSoftThresholdSAE.__name__:
+        return SignedSoftThresholdSAE(
+            n_instances=1,
+            d_in=input_dim,
+            d_hidden=model_config.d_hidden,
+            resample_latents_threshold=resample_latents_threshold,
             device=device,
         )
     raise ValueError(f"Unknown SAE class: {model_config.sae_class}")
@@ -149,7 +157,8 @@ def run_training_for_variant(
             for loss_name, loss_values in losses_dict.items():
                 epoch_totals[loss_name] += loss_values.mean().item()
             if experiment_config.verbose and (
-                (step + 1) % experiment_config.log_every_n_steps == 0 or step + 1 == steps_per_epoch
+                (step + 1) % experiment_config.log_every_n_steps == 0
+                or step + 1 == steps_per_epoch
             ):
                 _log_step_progress(
                     epoch,
@@ -181,7 +190,9 @@ def run_training_for_variant(
         )
         training_metrics["loss_sparsity"].append(epoch_mean_losses["sparsity_losses"])
         if "aux_loss" in epoch_mean_losses:
-            training_metrics.setdefault("loss_aux", []).append(epoch_mean_losses["aux_loss"])
+            training_metrics.setdefault("loss_aux", []).append(
+                epoch_mean_losses["aux_loss"]
+            )
 
     if terminated_early:
         training_metrics["terminated_early"] = True
@@ -200,7 +211,16 @@ def persist_model_artifacts(
     torch.save(model, model_path)
     model_config_path = os.path.join(model_dir, "model_config.json")
     with open(model_config_path, "w") as f:
-        json.dump(asdict(model_config), f, indent=2)
+        serialized_config = asdict(model_config)
+        serialized_config["parameter_count"] = int(
+            sum(parameter.numel() for parameter in model.parameters())
+        )
+        serialized_config["model_class"] = model.__class__.__name__
+        if hasattr(model, "d_in"):
+            serialized_config["d_in"] = int(getattr(model, "d_in"))
+        if hasattr(model, "d_hidden"):
+            serialized_config["d_hidden_effective"] = int(getattr(model, "d_hidden"))
+        json.dump(serialized_config, f, indent=2)
     training_metrics_path = os.path.join(model_dir, "training_metrics.json")
     with open(training_metrics_path, "w") as f:
         json.dump(training_metrics, f, indent=2)

@@ -190,12 +190,12 @@
     - Record per-axis `n_pos` and `n_neg`, and enforce `min_regime_samples` gating for \(\gamma\) fitting.
     - _Requirements: 3.5, 3.6, 3.7_
 
-- [ ] 10. Add fair baselines required for reviewer-grade comparisons
-  - [ ] 10.1 Add `2x_width` non-negative baselines
+- [x] 10. Add fair baselines required for reviewer-grade comparisons
+  - [x] 10.1 Add `2x_width` non-negative baselines
     - Add model configs for `relu_sae_2x` and `gated_sae_2x` where `d_hidden=2*H` (or `width_multiplier=2`).
     - Ensure parameter count and width are recorded in `model_config.json` and in `comparison_summary.json`.
     - _Requirements: 6.1, 6.2, 6.5_
-  - [ ] 10.2 Add a signed-latent baseline (soft-threshold / signed shrinkage)
+  - [x] 10.2 Add a signed-latent baseline (soft-threshold / signed shrinkage)
     - Implement a simple signed sparse-coding style encoder baseline:
       - activation `a = sign(z) * ReLU(|z| - theta)` (soft-threshold) where `z = W_enc (x - mu) + b`.
       - decoder `x_hat = D a + b_dec`, trained with reconstruction + \(\ell_1\) penalty on `a`.

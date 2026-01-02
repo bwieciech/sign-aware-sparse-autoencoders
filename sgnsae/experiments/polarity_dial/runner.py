@@ -157,11 +157,28 @@ def _run_single_model(
     )
     _log_wandb_artifacts(wandb_run, training_output["training_metrics"], calibration)
 
-    return {"model_dir": model_dir, "calibration": calibration}
+    parameter_count = int(
+        sum(parameter.numel() for parameter in training_output["model"].parameters())
+    )
+    d_hidden_effective = (
+        int(getattr(training_output["model"], "d_hidden"))
+        if hasattr(training_output["model"], "d_hidden")
+        else int(model_config.d_hidden)
+    )
+    return {
+        "model_dir": model_dir,
+        "calibration": calibration,
+        "metadata": {
+            "d_hidden": int(model_config.d_hidden),
+            "d_hidden_effective": d_hidden_effective,
+            "parameter_count": parameter_count,
+        },
+    }
 
 
 def _build_comparison_summary(
     calibration_by_model: Dict[str, Dict[str, Any]],
+    model_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     summaries = {
         model_name: calibration["summary"]
@@ -193,6 +210,7 @@ def _build_comparison_summary(
         "summaries": summaries,
         "baseline": baseline,
         "relative_to_baseline": relative_to_baseline,
+        "model_metadata": model_metadata or {},
     }
 
 
@@ -209,13 +227,17 @@ def run_polarity_dial_experiment(config_path: str) -> str:
     set_random_seed(config.data.seed)
 
     calibration_by_model: Dict[str, Dict[str, Any]] = {}
+    metadata_by_model: Dict[str, Dict[str, Any]] = {}
     for model_config in config.models:
         model_result = _run_single_model(
             config, run_dir, run_id, model_config, data, device
         )
         calibration_by_model[model_config.name] = model_result["calibration"]
+        metadata_by_model[model_config.name] = model_result["metadata"]
 
-    comparison_summary = _build_comparison_summary(calibration_by_model)
+    comparison_summary = _build_comparison_summary(
+        calibration_by_model, metadata_by_model
+    )
     comparison_path = os.path.join(run_dir, "comparison_summary.json")
     with open(comparison_path, "w") as f:
         json.dump(comparison_summary, f, indent=2)

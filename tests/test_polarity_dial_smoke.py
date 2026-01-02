@@ -78,6 +78,10 @@ class TestPolarityDialSmoke(unittest.TestCase):
                 os.path.isfile(os.path.join(model_dir, "axis_alignment.json"))
             )
             self.assertTrue(os.path.isfile(os.path.join(model_dir, "calibration.json")))
+            with open(os.path.join(model_dir, "model_config.json"), "r") as f:
+                model_config = json.load(f)
+            self.assertIn("parameter_count", model_config)
+            self.assertIn("d_hidden_effective", model_config)
             plots_dir = os.path.join(model_dir, "plots")
             self.assertTrue(
                 os.path.isfile(
@@ -99,6 +103,14 @@ class TestPolarityDialSmoke(unittest.TestCase):
             )
             self.assertTrue(
                 os.path.isfile(os.path.join(run_dir, "comparison_summary.json"))
+            )
+            with open(os.path.join(run_dir, "comparison_summary.json"), "r") as f:
+                comparison_summary = json.load(f)
+            self.assertIn("model_metadata", comparison_summary)
+            self.assertIn("relu_sae_smoke", comparison_summary["model_metadata"])
+            self.assertIn(
+                "parameter_count",
+                comparison_summary["model_metadata"]["relu_sae_smoke"],
             )
             self.assertTrue(
                 os.path.isfile(os.path.join(run_dir, "gamma_diff_bar_comparison.png"))

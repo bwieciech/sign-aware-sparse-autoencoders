@@ -14,7 +14,7 @@ from sgnsae.experiments.polarity_dial import evaluation as evaluation_module
 from sgnsae.experiments.polarity_dial import plotting as plotting_module
 from sgnsae.experiments.polarity_dial import runner as runner_module
 from sgnsae.experiments.polarity_dial import training as training_module
-from sgnsae.models import GatedSAE, SAE, SAEBase
+from sgnsae.models import GatedSAE, SAE, SAEBase, SignedSoftThresholdSAE
 
 
 class TestPolarityDialConfigValidation(unittest.TestCase):
@@ -661,6 +661,30 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
             training_module._instantiate_model(
                 config, input_dim=2, steps_per_epoch=1, device="cpu"
             )
+
+    def test_instantiate_model_supports_signed_soft_threshold(self) -> None:
+        # given
+        config = config_module.PolarityDialModelVariantConfig(
+            name="signed_soft_threshold",
+            sae_class="SignedSoftThresholdSAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when
+        model = training_module._instantiate_model(
+            config, input_dim=2, steps_per_epoch=2, device="cpu"
+        )
+
+        # then
+        self.assertIsInstance(model, SignedSoftThresholdSAE)
 
     def test_log_helpers_emit_expected_text(self) -> None:
         # given

@@ -310,9 +310,12 @@ def compute_alignment_and_calibration(
     scatter_negative_pred: List[float] = []
 
     per_pair_entries: List[Dict[str, Any]] = []
-    is_non_negative_model = False
+    signed_latents = False
+    if hasattr(model, "signed_latents"):
+        signed_latents = bool(getattr(model, "signed_latents"))
     if hasattr(model, "sign_aware"):
-        is_non_negative_model = not bool(getattr(model, "sign_aware"))
+        signed_latents = signed_latents or bool(getattr(model, "sign_aware"))
+    is_non_negative_model = not signed_latents
     use_axis_aggregation = (
         evaluation_config.axis_aggregation_for_nonnegative and is_non_negative_model
     )
