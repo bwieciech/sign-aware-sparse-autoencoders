@@ -64,5 +64,12 @@
         0.999
       ]
     }
-  ]
+  ],
+  "evaluation": {
+    "alignment_mode": "axis_abs_cosine",
+    "axis_aggregation_for_nonnegative": true,
+    "normalize_decoder_for_eval": true,
+    "min_regime_samples": 50,
+    "max_points_per_regime_scatter": 5000
+  }
 }

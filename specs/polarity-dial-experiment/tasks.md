@@ -166,26 +166,26 @@
     - Clarify that paper metrics are computed by averaging the three runs `{seed=0,1,2}` for each model variant.
     - _Requirements: 4.1, 4.2, 4.3, 5.1, 5.2_
 
-- [ ] 9. Fix evaluation fairness: axis-aware alignment and non-negative axis aggregation
-  - [ ] 9.1 Add evaluation config and plumb it through the CLI
+- [x] 9. Fix evaluation fairness: axis-aware alignment and non-negative axis aggregation
+  - [x] 9.1 Add evaluation config and plumb it through the CLI
     - Add `PolarityDialEvaluationConfig` to the experiment config with fields:
       - `alignment_mode`, `axis_aggregation_for_nonnegative`, `normalize_decoder_for_eval`, `min_regime_samples`, `max_points_per_regime_scatter`.
     - Default to axis-aware alignment and decoder normalization for evaluation.
     - _Requirements: 3.1, 3.2, 4.1_
-  - [ ] 9.2 Implement axis-aware matching (abs-cosine + signed bookkeeping)
+  - [x] 9.2 Implement axis-aware matching (abs-cosine + signed bookkeeping)
     - Compute signed cosine `S_signed[i,j]=cos(D_eval[:,i],u_j)` and axis similarity `S_axis=abs(S_signed)`.
     - Run Hungarian matching on `S_axis` to map each latent to an axis, then store:
       - `axis_cos=abs(S_signed)`, `signed_cos=S_signed`, and a `sign_correction` factor per match.
     - Add an explicit unit test where a decoder column equals `-u_j` and confirm it matches axis `j`.
     - _Requirements: 3.1_
-  - [ ] 9.3 Implement non-negative axis aggregation (two atoms per axis)
+  - [x] 9.3 Implement non-negative axis aggregation (two atoms per axis)
     - For non-negative models, build `axis_alignment.json` with up to two latents per axis:
       - `latent_pos`: best latent with positive signed cosine to `u_j`
       - `latent_neg`: best latent with negative signed cosine to `u_j`
     - Implement `hat_c_j(x)=a_pos(x)-a_neg(x)` at the axis level (missing side treated as zero).
     - Add a unit test where a baseline model has two perfect atoms `+u_j` and `-u_j` and confirm \(\gamma_+\approx 1\), \(\gamma_-\approx 1\) under aggregation.
     - _Requirements: 3.2, 3.3_
-  - [ ] 9.4 Add robust per-regime diagnostics to `calibration.json`
+  - [x] 9.4 Add robust per-regime diagnostics to `calibration.json`
     - Compute per-regime coefficient MSE, Pearson correlation, and \(R^2\) for each axis and aggregate them into the summary.
     - Record per-axis `n_pos` and `n_neg`, and enforce `min_regime_samples` gating for \(\gamma\) fitting.
     - _Requirements: 3.5, 3.6, 3.7_

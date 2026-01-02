@@ -6,45 +6,122 @@ import torch
 from scipy.optimize import linear_sum_assignment
 from torch import Tensor
 
+from sgnsae.experiments.polarity_dial.config import PolarityDialEvaluationConfig
 
-def _get_decoder_directions(model: torch.nn.Module) -> Tensor:
+
+def _get_decoder_directions(model: torch.nn.Module, normalize: bool) -> Tensor:
     if not hasattr(model, "W_dec"):
         raise ValueError("Model does not expose a decoder matrix (W_dec).")
     decoder = model.W_dec.detach()
-    decoder = decoder / (decoder.norm(dim=1, keepdim=True) + 1e-8)
-    decoder = decoder[0].transpose(0, 1)
-    decoder = decoder / (decoder.norm(dim=1, keepdim=True) + 1e-8)
+    if normalize:
+        decoder = decoder / (decoder.norm(dim=1, keepdim=True) + 1e-8)
+    decoder = decoder[0].transpose(0, 1).contiguous()
     return decoder
 
 
+def _safe_unit_norm(tensor: Tensor, eps: float) -> Tensor:
+    return tensor / (tensor.norm(dim=-1, keepdim=True) + eps)
+
+
 def align_decoder_and_features(
-    model: torch.nn.Module, feature_directions: Tensor
-) -> Tuple[Dict[str, Any], Tensor]:
-    decoder_directions = _get_decoder_directions(model)
-    cosine_matrix = decoder_directions.cpu() @ feature_directions.cpu().transpose(0, 1)
-    # Sign-invariant matching: feature axes are equivalent up to a sign flip.
-    row_indices, col_indices = linear_sum_assignment((-cosine_matrix.abs()).numpy())
+    model: torch.nn.Module,
+    feature_directions: Tensor,
+    evaluation_config: PolarityDialEvaluationConfig,
+) -> Tuple[Dict[str, Any], Dict[str, Any], Tensor]:
+    decoder_directions = _get_decoder_directions(
+        model, normalize=evaluation_config.normalize_decoder_for_eval
+    )
+    decoder_unit = _safe_unit_norm(decoder_directions, eps=1e-8)
+    feature_unit = _safe_unit_norm(feature_directions, eps=1e-8)
+
+    signed_cosine_matrix = decoder_unit.cpu() @ feature_unit.cpu().transpose(0, 1)
+    axis_cosine_matrix = signed_cosine_matrix.abs()
+    row_indices, col_indices = linear_sum_assignment((-axis_cosine_matrix).numpy())
 
     matched_pairs = []
     for latent_idx, feature_idx in zip(row_indices, col_indices):
+        signed_cos = float(signed_cosine_matrix[latent_idx, feature_idx])
+        axis_cos = float(axis_cosine_matrix[latent_idx, feature_idx])
+        sign_correction = 1.0 if signed_cos >= 0 else -1.0
         matched_pairs.append(
             {
                 "latent_index": int(latent_idx),
                 "feature_index": int(feature_idx),
-                "cosine_similarity": float(cosine_matrix[latent_idx, feature_idx]),
-                "abs_cosine_similarity": float(
-                    cosine_matrix[latent_idx, feature_idx].abs()
-                ),
+                "signed_cos": signed_cos,
+                "axis_cos": axis_cos,
+                "sign_correction": sign_correction,
+                "cosine_similarity": signed_cos,
+                "abs_cosine_similarity": axis_cos,
             }
         )
     unmatched_latents = [
         idx for idx in range(decoder_directions.shape[0]) if idx not in set(row_indices)
     ]
     alignment = {
+        "alignment_mode": evaluation_config.alignment_mode,
+        "eval_decoder_normalized": evaluation_config.normalize_decoder_for_eval,
         "matched_pairs": matched_pairs,
         "unmatched_latents": unmatched_latents,
     }
-    return alignment, decoder_directions
+
+    feature_to_match = {p["feature_index"]: p for p in matched_pairs}
+    axes: List[Dict[str, Any]] = []
+    for feature_index in range(feature_unit.shape[0]):
+        signed_cos_values = signed_cosine_matrix[:, feature_index]
+        pos_mask = signed_cos_values >= 0
+        neg_mask = signed_cos_values < 0
+        pos_idx = None
+        neg_idx = None
+        if pos_mask.any():
+            pos_candidates = torch.where(pos_mask)[0]
+            best_pos = signed_cos_values[pos_candidates].argmax()
+            pos_idx = int(pos_candidates[best_pos].item())
+        if neg_mask.any():
+            neg_candidates = torch.where(neg_mask)[0]
+            best_neg = signed_cos_values[neg_candidates].argmin()
+            neg_idx = int(neg_candidates[best_neg].item())
+
+        match = feature_to_match.get(feature_index)
+        axes.append(
+            {
+                "feature_index": int(feature_index),
+                "one_to_one_latent": None if match is None else match["latent_index"],
+                "one_to_one_signed_cos": None if match is None else match["signed_cos"],
+                "one_to_one_axis_cos": None if match is None else match["axis_cos"],
+                "one_to_one_sign_correction": (
+                    None if match is None else match["sign_correction"]
+                ),
+                "latent_pos": pos_idx,
+                "latent_neg": neg_idx,
+                "signed_cos_pos": (
+                    None
+                    if pos_idx is None
+                    else float(signed_cosine_matrix[pos_idx, feature_index])
+                ),
+                "signed_cos_neg": (
+                    None
+                    if neg_idx is None
+                    else float(signed_cosine_matrix[neg_idx, feature_index])
+                ),
+                "axis_cos_pos": (
+                    None
+                    if pos_idx is None
+                    else float(axis_cosine_matrix[pos_idx, feature_index])
+                ),
+                "axis_cos_neg": (
+                    None
+                    if neg_idx is None
+                    else float(axis_cosine_matrix[neg_idx, feature_index])
+                ),
+            }
+        )
+
+    axis_alignment: Dict[str, Any] = {
+        "alignment_mode": evaluation_config.alignment_mode,
+        "eval_decoder_normalized": evaluation_config.normalize_decoder_for_eval,
+        "axes": axes,
+    }
+    return alignment, axis_alignment, decoder_directions
 
 
 def _compute_gamma(
@@ -74,7 +151,9 @@ def _safe_std(values: List[Optional[float]]) -> Optional[float]:
     if len(filtered) < 2:
         return None
     mean_value = sum(filtered) / len(filtered)
-    variance = sum((value - mean_value) ** 2 for value in filtered) / (len(filtered) - 1)
+    variance = sum((value - mean_value) ** 2 for value in filtered) / (
+        len(filtered) - 1
+    )
     return float(variance**0.5)
 
 
@@ -94,42 +173,108 @@ def _sample_points(
     return true_values.cpu().tolist(), predicted_values.cpu().tolist()
 
 
-def _calculate_per_pair_metrics(
+def _compute_coef_mse(true_values: Tensor, predicted_values: Tensor) -> Optional[float]:
+    if true_values.numel() == 0:
+        return None
+    return float((predicted_values - true_values).pow(2).mean().item())
+
+
+def _compute_pearson_r(
+    true_values: Tensor, predicted_values: Tensor, eps: float
+) -> Optional[float]:
+    if true_values.numel() < 2:
+        return None
+    true_centered = true_values - true_values.mean()
+    predicted_centered = predicted_values - predicted_values.mean()
+    denominator = (
+        torch.sqrt(true_centered.pow(2).sum() * predicted_centered.pow(2).sum()) + eps
+    )
+    if denominator.item() == 0.0:
+        return None
+    r_value = (true_centered * predicted_centered).sum() / denominator
+    return float(r_value.clamp(min=-1.0, max=1.0).item())
+
+
+def _compute_r2(
+    true_values: Tensor, predicted_values: Tensor, eps: float
+) -> Optional[float]:
+    if true_values.numel() < 2:
+        return None
+    ss_res = (true_values - predicted_values).pow(2).sum()
+    ss_tot = (true_values - true_values.mean()).pow(2).sum()
+    if ss_tot.item() <= eps:
+        return None
+    r2_value = 1.0 - ss_res / ss_tot
+    return float(r2_value.item())
+
+
+def _calculate_per_axis_metrics(
     true_coefficients: Tensor,
     predicted_coefficients: Tensor,
-    projection_factor: float,
-    latent_index: int,
-    feature_index: int,
     eps: float,
-    min_count: int,
+    min_regime_samples: int,
 ) -> Dict[str, Any]:
-    predicted_scaled = predicted_coefficients * projection_factor
     positive_mask = true_coefficients > 0
     negative_mask = true_coefficients < 0
+    n_pos = int(positive_mask.sum().item())
+    n_neg = int(negative_mask.sum().item())
+
     gamma_plus = _compute_gamma(
         true_coefficients[positive_mask],
-        predicted_scaled[positive_mask],
+        predicted_coefficients[positive_mask],
         eps,
-        min_count,
+        min_regime_samples,
     )
     gamma_minus = _compute_gamma(
         true_coefficients[negative_mask],
-        predicted_scaled[negative_mask],
+        predicted_coefficients[negative_mask],
         eps,
-        min_count,
+        min_regime_samples,
     )
+    coef_mse_pos = _compute_coef_mse(
+        true_coefficients[positive_mask],
+        predicted_coefficients[positive_mask],
+    )
+    coef_mse_neg = _compute_coef_mse(
+        true_coefficients[negative_mask],
+        predicted_coefficients[negative_mask],
+    )
+    pearson_r_pos = _compute_pearson_r(
+        true_coefficients[positive_mask],
+        predicted_coefficients[positive_mask],
+        eps,
+    )
+    pearson_r_neg = _compute_pearson_r(
+        true_coefficients[negative_mask],
+        predicted_coefficients[negative_mask],
+        eps,
+    )
+    r2_pos = _compute_r2(
+        true_coefficients[positive_mask],
+        predicted_coefficients[positive_mask],
+        eps,
+    )
+    r2_neg = _compute_r2(
+        true_coefficients[negative_mask],
+        predicted_coefficients[negative_mask],
+        eps,
+    )
+
     rel_error_plus = None if gamma_plus is None else abs(gamma_plus - 1.0)
     rel_error_minus = None if gamma_minus is None else abs(gamma_minus - 1.0)
     return {
-        "latent_index": latent_index,
-        "feature_index": feature_index,
         "gamma_plus": gamma_plus,
         "gamma_minus": gamma_minus,
         "rel_error_plus": rel_error_plus,
         "rel_error_minus": rel_error_minus,
-        "positive_mask": positive_mask,
-        "negative_mask": negative_mask,
-        "predicted_scaled": predicted_scaled,
+        "n_pos": n_pos,
+        "n_neg": n_neg,
+        "coef_mse_pos": coef_mse_pos,
+        "coef_mse_neg": coef_mse_neg,
+        "pearson_r_pos": pearson_r_pos,
+        "pearson_r_neg": pearson_r_neg,
+        "r2_pos": r2_pos,
+        "r2_neg": r2_neg,
     }
 
 
@@ -137,11 +282,9 @@ def compute_alignment_and_calibration(
     model: torch.nn.Module,
     x_test: Tensor,
     coefficients_test: Tensor,
-    feature_directions: Tensor,
     alignment: Dict[str, Any],
-    decoder_directions: Tensor,
-    max_scatter_points_per_regime: int,
-    min_gamma_count: int = 5,
+    axis_alignment: Dict[str, Any],
+    evaluation_config: PolarityDialEvaluationConfig,
     eps: float = 1e-8,
 ) -> Tuple[Dict[str, Any], Dict[str, List[float]]]:
     model.eval()
@@ -150,7 +293,9 @@ def compute_alignment_and_calibration(
     latents = output["latents"][0]
 
     # Protocol-level metrics (works for SAE and GatedSAE outputs).
-    recon_key = "x_hat" if "x_hat" in output else ("y_pred" if "y_pred" in output else None)
+    recon_key = (
+        "x_hat" if "x_hat" in output else ("y_pred" if "y_pred" in output else None)
+    )
     if recon_key is None:
         raise ValueError(
             "Model output does not contain a reconstruction key ('x_hat' or 'y_pred')."
@@ -165,23 +310,92 @@ def compute_alignment_and_calibration(
     scatter_negative_pred: List[float] = []
 
     per_pair_entries: List[Dict[str, Any]] = []
-    for pair in alignment["matched_pairs"]:
-        latent_index = pair["latent_index"]
-        feature_index = pair["feature_index"]
-        projection_factor = float(
-            torch.dot(
-                decoder_directions[latent_index],
-                feature_directions[feature_index],
-            ).item()
-        )
-        metrics = _calculate_per_pair_metrics(
+    is_non_negative_model = False
+    if hasattr(model, "sign_aware"):
+        is_non_negative_model = not bool(getattr(model, "sign_aware"))
+    use_axis_aggregation = (
+        evaluation_config.axis_aggregation_for_nonnegative and is_non_negative_model
+    )
+    if use_axis_aggregation:
+        axis_entries = axis_alignment["axes"]
+    else:
+        axis_entries = alignment["matched_pairs"]
+
+    for entry in axis_entries:
+        if use_axis_aggregation:
+            feature_index = int(entry["feature_index"])
+            latent_pos = entry.get("latent_pos")
+            latent_neg = entry.get("latent_neg")
+            predicted = torch.zeros(latents.shape[0], device=latents.device)
+            if latent_pos is not None and entry.get("signed_cos_pos") is not None:
+                predicted = predicted + latents[:, latent_pos] * float(
+                    entry["signed_cos_pos"]
+                )
+            if latent_neg is not None and entry.get("signed_cos_neg") is not None:
+                predicted = predicted + latents[:, latent_neg] * float(
+                    entry["signed_cos_neg"]
+                )
+            metrics = _calculate_per_axis_metrics(
+                coefficients_test[:, feature_index],
+                predicted,
+                eps,
+                evaluation_config.min_regime_samples,
+            )
+            per_pair_entries.append(
+                {
+                    "latent_index": None,
+                    "feature_index": feature_index,
+                    "latent_pos": latent_pos,
+                    "latent_neg": latent_neg,
+                    "gamma_plus": metrics["gamma_plus"],
+                    "gamma_minus": metrics["gamma_minus"],
+                    "rel_error_plus": metrics["rel_error_plus"],
+                    "rel_error_minus": metrics["rel_error_minus"],
+                    "n_pos": metrics["n_pos"],
+                    "n_neg": metrics["n_neg"],
+                    "coef_mse_pos": metrics["coef_mse_pos"],
+                    "coef_mse_neg": metrics["coef_mse_neg"],
+                    "pearson_r_pos": metrics["pearson_r_pos"],
+                    "pearson_r_neg": metrics["pearson_r_neg"],
+                    "r2_pos": metrics["r2_pos"],
+                    "r2_neg": metrics["r2_neg"],
+                }
+            )
+
+            remaining_positive_budget = (
+                evaluation_config.max_points_per_regime_scatter
+                - len(scatter_positive_true)
+            )
+            remaining_negative_budget = (
+                evaluation_config.max_points_per_regime_scatter
+                - len(scatter_negative_true)
+            )
+            positive_mask = coefficients_test[:, feature_index] > 0
+            negative_mask = coefficients_test[:, feature_index] < 0
+            true_pos, pred_pos = _sample_points(
+                coefficients_test[:, feature_index][positive_mask],
+                predicted[positive_mask],
+                remaining_positive_budget,
+            )
+            true_neg, pred_neg = _sample_points(
+                coefficients_test[:, feature_index][negative_mask],
+                predicted[negative_mask],
+                remaining_negative_budget,
+            )
+            scatter_positive_true.extend(true_pos)
+            scatter_positive_pred.extend(pred_pos)
+            scatter_negative_true.extend(true_neg)
+            scatter_negative_pred.extend(pred_neg)
+            continue
+
+        latent_index = int(entry["latent_index"])
+        feature_index = int(entry["feature_index"])
+        predicted = latents[:, latent_index] * float(entry["signed_cos"])
+        metrics = _calculate_per_axis_metrics(
             coefficients_test[:, feature_index],
-            latents[:, latent_index],
-            projection_factor,
-            latent_index,
-            feature_index,
+            predicted,
             eps,
-            min_gamma_count,
+            evaluation_config.min_regime_samples,
         )
         per_pair_entries.append(
             {
@@ -191,23 +405,33 @@ def compute_alignment_and_calibration(
                 "gamma_minus": metrics["gamma_minus"],
                 "rel_error_plus": metrics["rel_error_plus"],
                 "rel_error_minus": metrics["rel_error_minus"],
+                "n_pos": metrics["n_pos"],
+                "n_neg": metrics["n_neg"],
+                "coef_mse_pos": metrics["coef_mse_pos"],
+                "coef_mse_neg": metrics["coef_mse_neg"],
+                "pearson_r_pos": metrics["pearson_r_pos"],
+                "pearson_r_neg": metrics["pearson_r_neg"],
+                "r2_pos": metrics["r2_pos"],
+                "r2_neg": metrics["r2_neg"],
             }
         )
 
-        remaining_positive_budget = max_scatter_points_per_regime - len(
-            scatter_positive_true
+        remaining_positive_budget = (
+            evaluation_config.max_points_per_regime_scatter - len(scatter_positive_true)
         )
-        remaining_negative_budget = max_scatter_points_per_regime - len(
-            scatter_negative_true
+        remaining_negative_budget = (
+            evaluation_config.max_points_per_regime_scatter - len(scatter_negative_true)
         )
+        positive_mask = coefficients_test[:, feature_index] > 0
+        negative_mask = coefficients_test[:, feature_index] < 0
         true_pos, pred_pos = _sample_points(
-            coefficients_test[:, feature_index][metrics["positive_mask"]],
-            metrics["predicted_scaled"][metrics["positive_mask"]],
+            coefficients_test[:, feature_index][positive_mask],
+            predicted[positive_mask],
             remaining_positive_budget,
         )
         true_neg, pred_neg = _sample_points(
-            coefficients_test[:, feature_index][metrics["negative_mask"]],
-            metrics["predicted_scaled"][metrics["negative_mask"]],
+            coefficients_test[:, feature_index][negative_mask],
+            predicted[negative_mask],
             remaining_negative_budget,
         )
         scatter_positive_true.extend(true_pos)
@@ -225,11 +449,41 @@ def compute_alignment_and_calibration(
         "test_l0": test_l0,
         "mean_gamma_plus": _safe_mean(gamma_plus_values),
         "mean_gamma_minus": _safe_mean(gamma_minus_values),
+        "std_gamma_plus": _safe_std(gamma_plus_values),
+        "std_gamma_minus": _safe_std(gamma_minus_values),
         "mean_rel_error_plus": _safe_mean(rel_error_plus_values),
         "mean_rel_error_minus": _safe_mean(rel_error_minus_values),
         "std_rel_error_plus": _safe_std(rel_error_plus_values),
         "std_rel_error_minus": _safe_std(rel_error_minus_values),
         "num_pairs": len(per_pair_entries),
+        "mean_coef_mse_pos": _safe_mean(
+            [entry["coef_mse_pos"] for entry in per_pair_entries]
+        ),
+        "mean_coef_mse_neg": _safe_mean(
+            [entry["coef_mse_neg"] for entry in per_pair_entries]
+        ),
+        "std_coef_mse_pos": _safe_std(
+            [entry["coef_mse_pos"] for entry in per_pair_entries]
+        ),
+        "std_coef_mse_neg": _safe_std(
+            [entry["coef_mse_neg"] for entry in per_pair_entries]
+        ),
+        "mean_pearson_r_pos": _safe_mean(
+            [entry["pearson_r_pos"] for entry in per_pair_entries]
+        ),
+        "mean_pearson_r_neg": _safe_mean(
+            [entry["pearson_r_neg"] for entry in per_pair_entries]
+        ),
+        "std_pearson_r_pos": _safe_std(
+            [entry["pearson_r_pos"] for entry in per_pair_entries]
+        ),
+        "std_pearson_r_neg": _safe_std(
+            [entry["pearson_r_neg"] for entry in per_pair_entries]
+        ),
+        "mean_r2_pos": _safe_mean([entry["r2_pos"] for entry in per_pair_entries]),
+        "mean_r2_neg": _safe_mean([entry["r2_neg"] for entry in per_pair_entries]),
+        "std_r2_pos": _safe_std([entry["r2_pos"] for entry in per_pair_entries]),
+        "std_r2_neg": _safe_std([entry["r2_neg"] for entry in per_pair_entries]),
     }
 
     calibration = {
@@ -248,12 +502,16 @@ def compute_alignment_and_calibration(
 def persist_alignment_and_calibration(
     model_dir: str,
     alignment: Dict[str, Any],
+    axis_alignment: Dict[str, Any],
     calibration: Dict[str, Any],
 ) -> None:
     os.makedirs(model_dir, exist_ok=True)
     alignment_path = os.path.join(model_dir, "alignment.json")
     with open(alignment_path, "w") as f:
         json.dump(alignment, f, indent=2)
+    axis_alignment_path = os.path.join(model_dir, "axis_alignment.json")
+    with open(axis_alignment_path, "w") as f:
+        json.dump(axis_alignment, f, indent=2)
     calibration_path = os.path.join(model_dir, "calibration.json")
     with open(calibration_path, "w") as f:
         json.dump(calibration, f, indent=2)

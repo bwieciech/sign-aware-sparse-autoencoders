@@ -68,7 +68,10 @@ def _maybe_init_wandb(
     model_name: str,
     run_id: str,
 ) -> Optional[Any]:
-    if experiment_config.wandb_project is None or experiment_config.wandb_api_key is None:
+    if (
+        experiment_config.wandb_project is None
+        or experiment_config.wandb_api_key is None
+    ):
         return None
     if wandb is None:
         return None
@@ -90,15 +93,21 @@ def _log_wandb_artifacts(
         return
     wandb_run.log(
         {
-            "training_loss_total": training_metrics["loss_total"][-1]
-            if training_metrics["loss_total"]
-            else None,
-            "training_loss_reconstruction": training_metrics["loss_reconstruction"][-1]
-            if training_metrics["loss_reconstruction"]
-            else None,
-            "training_loss_sparsity": training_metrics["loss_sparsity"][-1]
-            if training_metrics["loss_sparsity"]
-            else None,
+            "training_loss_total": (
+                training_metrics["loss_total"][-1]
+                if training_metrics["loss_total"]
+                else None
+            ),
+            "training_loss_reconstruction": (
+                training_metrics["loss_reconstruction"][-1]
+                if training_metrics["loss_reconstruction"]
+                else None
+            ),
+            "training_loss_sparsity": (
+                training_metrics["loss_sparsity"][-1]
+                if training_metrics["loss_sparsity"]
+                else None
+            ),
             "calibration_summary": calibration["summary"],
         }
     )
@@ -119,27 +128,33 @@ def _run_single_model(
         experiment_config, data, model_config, device
     )
     persist_model_artifacts(
-        training_output["model"], training_output["training_metrics"], model_config, model_dir
+        training_output["model"],
+        training_output["training_metrics"],
+        model_config,
+        model_dir,
     )
 
-    alignment, decoder_directions = align_decoder_and_features(
-        training_output["model"], data["feature_directions"]
+    alignment, axis_alignment, _ = align_decoder_and_features(
+        training_output["model"],
+        data["feature_directions"],
+        experiment_config.evaluation,
     )
     calibration, scatter_data = compute_alignment_and_calibration(
         training_output["model"],
         data["x_test"],
         data["coefficients_test"],
-        data["feature_directions"],
         alignment,
-        decoder_directions,
-        experiment_config.max_scatter_points_per_regime,
+        axis_alignment,
+        experiment_config.evaluation,
     )
-    persist_alignment_and_calibration(model_dir, alignment, calibration)
+    persist_alignment_and_calibration(model_dir, alignment, axis_alignment, calibration)
 
     plot_calibration_scatter(scatter_data, model_config.name, model_dir)
     plot_gamma_histograms(calibration, model_config.name, model_dir)
     plot_gamma_strip(calibration, model_config.name, model_dir)
-    plot_training_loss(training_output["training_metrics"], model_config.name, model_dir)
+    plot_training_loss(
+        training_output["training_metrics"], model_config.name, model_dir
+    )
     _log_wandb_artifacts(wandb_run, training_output["training_metrics"], calibration)
 
     return {"model_dir": model_dir, "calibration": calibration}
@@ -149,7 +164,8 @@ def _build_comparison_summary(
     calibration_by_model: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
     summaries = {
-        model_name: calibration["summary"] for model_name, calibration in calibration_by_model.items()
+        model_name: calibration["summary"]
+        for model_name, calibration in calibration_by_model.items()
     }
     baseline = next(iter(calibration_by_model.keys()))
     baseline_summary = calibration_by_model[baseline]["summary"]
@@ -157,14 +173,20 @@ def _build_comparison_summary(
     for model_name, calibration in calibration_by_model.items():
         summary = calibration["summary"]
         relative_to_baseline[model_name] = {
-            "delta_mean_rel_error_plus": None
-            if baseline_summary["mean_rel_error_plus"] is None
-            or summary["mean_rel_error_plus"] is None
-            else summary["mean_rel_error_plus"] - baseline_summary["mean_rel_error_plus"],
-            "delta_mean_rel_error_minus": None
-            if baseline_summary["mean_rel_error_minus"] is None
-            or summary["mean_rel_error_minus"] is None
-            else summary["mean_rel_error_minus"] - baseline_summary["mean_rel_error_minus"],
+            "delta_mean_rel_error_plus": (
+                None
+                if baseline_summary["mean_rel_error_plus"] is None
+                or summary["mean_rel_error_plus"] is None
+                else summary["mean_rel_error_plus"]
+                - baseline_summary["mean_rel_error_plus"]
+            ),
+            "delta_mean_rel_error_minus": (
+                None
+                if baseline_summary["mean_rel_error_minus"] is None
+                or summary["mean_rel_error_minus"] is None
+                else summary["mean_rel_error_minus"]
+                - baseline_summary["mean_rel_error_minus"]
+            ),
         }
     return {
         "models": list(calibration_by_model.keys()),
@@ -198,7 +220,10 @@ def run_polarity_dial_experiment(config_path: str) -> str:
     with open(comparison_path, "w") as f:
         json.dump(comparison_summary, f, indent=2)
     plot_gamma_comparison(
-        {name: calibration["summary"] for name, calibration in calibration_by_model.items()},
+        {
+            name: calibration["summary"]
+            for name, calibration in calibration_by_model.items()
+        },
         os.path.join(run_dir, "gamma_diff_bar_comparison.png"),
     )
     return run_dir
