@@ -8,12 +8,12 @@ This experiment trains SAEs on a synthetic dataset where each ground-truth featu
 
 1) Install dependencies:
 ```bash
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 ```
 
 2) Sanity check the repository (recommended before long runs):
 ```bash
-pytest -q
+.venv/bin/python -m unittest
 ```
 
 ### 1) What you will run (exact order)
@@ -43,17 +43,17 @@ Notes:
 
 Run seed 0:
 ```bash
-python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0.json
+.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0.json
 ```
 
 Run seed 1:
 ```bash
-python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1.json
+.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1.json
 ```
 
 Run seed 2:
 ```bash
-python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2.json
+.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2.json
 ```
 
 For each run, the script prints the output directory at the end:
@@ -152,17 +152,17 @@ Example model entry:
 
 Seed 0 ablation:
 `bash
-python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0_ablation.json
+.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0_ablation.json
 `
 
 Seed 1 ablation:
 `bash
-python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1_ablation.json
+.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1_ablation.json
 `
 
 Seed 2 ablation:
 `bash
-python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2_ablation.json
+.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2_ablation.json
 `
 
 Expected outputs: the run should produce the same artifacts as the base runs, plus one additional model directory:
@@ -182,12 +182,119 @@ This paired comparison per seed is the intended evidence for the claim that inde
 
 ### Paper reproduction configs
 - Configs live under `configs/` with exact parameters from the draft:
-  - `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0.json`
-  - `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1.json`
-  - `python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2.json`
+  - `.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0.json`
+  - `.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1.json`
+  - `.venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2.json`
 - Aggregate the metrics in `comparison_summary.json` across the three runs per model to match paper-reported numbers.
 
 ### Notes
 - Requirements now include `matplotlib` and `scipy` for plotting and Hungarian alignment.
 - Requirements now include `PyYAML` for YAML experiment configs.
 - Optional Weights & Biases logging activates when both `wandb_project` and `wandb_api_key` are provided in the experiment config.
+
+---
+
+## Directional Deviation Detection Experiment (Protocol B)
+
+This experiment trains SAE variants under a latent budget constraint (`d_hidden < num_channels`) and evaluates direction-aware anomaly detection (“too high” vs “too low”) at a fixed false positive rate.
+
+### 0) Quickstart (tiny run, sanity check only)
+
+1) Run the tiny config:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_directional_deviation_experiment --config-path configs/directional_deviation_tiny.json
+```
+
+2) Find the run directory printed at the end:
+```
+Run complete. Artifacts written to: <run_dir>
+```
+
+This tiny run is intended to verify the pipeline and artifact generation, but it is not the run you should use to produce paper results.
+
+### 1) Paper run (Protocol B results)
+
+This repository includes a paper-oriented config that matches the Protocol B setup in `main.tex`:
+- `N=1024` channels with standard normal data (`x ~ N(0, I)`),
+- directional anomalies as `±Δ` shifts on single channels,
+- undercomplete width (`H < N`) swept over multiple budgets,
+- Directional Recall @ fixed `FPR=1%`.
+
+Run the paper config:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_directional_deviation_experiment --config-path configs/directional_deviation_paper.json
+```
+
+This single command runs a width sweep and a seed sweep (configured in the JSON). It writes outputs under:
+`assets/directional_deviation_paper/directional_deviation/<run_id>/`. If you instead override `output_dir` to `assets/directional_deviation`, the runner now places artifacts directly under `assets/directional_deviation/<run_id>` instead of nesting another `directional_deviation` folder.
+
+The run directory contains:
+- One subdirectory per width: `<run_dir>/width_<H>/`
+- Within each width, one subdirectory per seed: `<run_dir>/width_<H>/seed_<seed>/`
+
+For paper plots and numbers, use:
+- `<run_dir>/plots/recall_vs_width.png` and `<run_dir>/plots/coverage_vs_width.png`
+- `<run_dir>/per-width metrics.json` (mean/std metrics per width, aggregated over seeds)
+
+### 2) What the config controls
+
+- Dataset: `data.num_channels` (`N`), normal sample counts, anomaly counts (`num_test_high_per_channel`, `num_test_low_per_channel`), anomaly streaming/materialization (`data.anomaly_eval_mode`).
+- Anomalies: `anomaly.delta` (`Δ`), `anomaly.shift_mode` (`single_channel` or `subset`).
+- Calibration: `thresholds.latent_quantile` (per-latent thresholds), `thresholds.score_fpr` (fixed-FPR score thresholds).
+- Models: `models[]` (each has `name`, `sae_class`, `sign_aware`, `d_hidden`, training hyperparameters).
+- Sweeps:
+  - Width sweep: add `"width_sweep": [32, 64, 128]` at the run root to run separate `width_<H>/` subruns.
+  - Seed sweep: set `data.seeds: [0, 1, 2]` to run separate `seed_<seed>/` subruns.
+
+### 3) Outputs to expect
+
+Run root (`<run_dir>/`):
+- `config.json`
+- `comparison_summary.json`
+- `plots/` (PNG plots; leaf runs include `leaf_summary.png`)
+
+Data export (`<run_dir>/data/`):
+- `generator_config.json`
+- `anomaly_manifest.json`
+- `sampled_data.pt`
+
+Per model (`<run_dir>/models/<model_name>/`):
+- `model.pt`
+- `model_config.json`
+- `training_metrics.json`
+- `thresholds/thresholds_metadata.json`
+- `thresholds/score_thresholds.json`
+- `evaluation.json`
+- Baseline models also write `thresholds/evidence_tau.pt`
+- Sign-aware models also write `thresholds/tau_plus.pt` and `thresholds/tau_minus.pt`
+
+Width sweep only:
+- Each width subrun directory (`<run_dir>/width_<H>/`) includes `metrics.json` and its own full set of run artifacts.
+- `<run_dir>/per-width metrics.json` collates per-width `metrics.json` (and uses mean/std when a seed sweep is enabled).
+- `plots/recall_vs_width.png` and `plots/coverage_vs_width.png` summarize performance vs width from `comparison_summary.json`.
+
+### 4) Verify outputs (required artifacts checklist)
+
+For the paper run `<run_dir>`:
+- `config.json`
+- `comparison_summary.json`
+- `per-width metrics.json`
+- `plots/recall_vs_width.png`
+- `plots/coverage_vs_width.png`
+
+For each width subrun (`<run_dir>/width_<H>/`):
+- `config.json`
+- `comparison_summary.json` (seed sweep summary, if `data.seeds` is enabled)
+- `metrics.json`
+
+For each leaf run (`<run_dir>/width_<H>/seed_<seed>/`):
+- `data/generator_config.json`
+- `data/anomaly_manifest.json`
+- `data/sampled_data.pt`
+- `comparison_summary.json`
+- `plots/leaf_summary.png`
+- `plots/score_histograms.png`
+- `models/<model_name>/model.pt`
+- `models/<model_name>/training_metrics.json`
+- `models/<model_name>/thresholds/score_thresholds.json`
+- `models/<model_name>/evaluation.json`

@@ -219,6 +219,41 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
         self.assertEqual(tuple(output.shape), (3, 1))
         self.assertTrue(torch.allclose(output, torch.ones((3, 1), dtype=torch.float32)))
 
+    def test_extract_validation_signal_cpu_uses_one_sided_evidence_for_baseline(
+        self,
+    ) -> None:
+        # given
+        x_val = torch.zeros((3, 2), dtype=torch.float32)
+
+        def evidence_side_effect(
+            model: torch.nn.Module, batch: torch.Tensor
+        ) -> torch.Tensor:
+            return torch.full((batch.shape[0], 1), 2.0, dtype=torch.float32)
+
+        # when
+        with patch.object(
+            runner_module,
+            "extract_one_sided_evidence",
+            side_effect=evidence_side_effect,
+        ) as evidence_mock, patch.object(
+            runner_module,
+            "extract_detection_signal",
+        ) as detection_mock:
+            output = runner_module._extract_validation_signal_cpu(
+                model=torch.nn.Identity(),
+                scoring_mode="baseline",
+                x_val=x_val,
+                batch_size=2,
+            )
+
+        # then
+        self.assertEqual(evidence_mock.call_count, 2)
+        detection_mock.assert_not_called()
+        self.assertEqual(tuple(output.shape), (3, 1))
+        self.assertTrue(
+            torch.allclose(output, torch.full((3, 1), 2.0, dtype=torch.float32))
+        )
+
     def test_extract_validation_signal_cpu_raises_for_empty_validation_set(
         self,
     ) -> None:
@@ -444,16 +479,50 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             self.assertEqual(set(persisted["per_width"].keys()), {"1", "2"})
             self.assertEqual(set(summary["per_width"].keys()), {"1", "2"})
 
+            per_width_metrics_path = os.path.join(run_dir, "per-width metrics.json")
+            self.assertTrue(os.path.isfile(per_width_metrics_path))
+            with open(per_width_metrics_path, "r") as f:
+                per_width_metrics = json.load(f)
+            self.assertEqual(per_width_metrics["widths"], [1, 2])
+            self.assertEqual(
+                set(per_width_metrics["per_width"].keys()),
+                {"1", "2"},
+            )
+
             for width in sweep_config.width_sweep or []:
                 width_dir = os.path.join(run_dir, f"width_{width}")
                 self.assertTrue(os.path.isdir(width_dir))
                 config_path = os.path.join(width_dir, "config.json")
                 self.assertTrue(os.path.isfile(config_path))
+                metrics_path = os.path.join(width_dir, "metrics.json")
+                self.assertTrue(os.path.isfile(metrics_path))
                 with open(config_path, "r") as f:
                     width_config = json.load(f)
                 self.assertIsNone(width_config["wandb_api_key"])
                 self.assertIsNone(width_config["width_sweep"])
                 self.assertEqual(width_config["models"][0]["d_hidden"], width)
+
+    def test_extract_models_metrics_for_metrics_json_supports_aggregate_over_seeds(
+        self,
+    ) -> None:
+        # given
+        summary = {
+            "aggregate_over_seeds": {
+                "models": {
+                    "relu_sae": {
+                        "recall_high_mean": 0.1,
+                        "recall_high_std": 0.0,
+                        "recall_high_n": 1,
+                    }
+                }
+            }
+        }
+
+        # when
+        models = runner_module._extract_models_metrics_for_metrics_json(summary)
+
+        # then
+        self.assertIn("relu_sae", models)
 
     def test_run_seed_sweep_raises_when_seeds_missing(self) -> None:
         # given

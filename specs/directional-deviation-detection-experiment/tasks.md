@@ -99,27 +99,27 @@
     - If `seeds` is provided, run separate sub-runs per seed and collate mean/std metrics into the comparison artifact(s).
     - _Requirements: 4.5_
 
-- [ ] 7. Add minimal plotting helpers (optional but recommended)
-  - [ ] 7.1 Plot recall/coverage vs width and score distributions
+- [x] 7. Add minimal plotting helpers (optional but recommended)
+  - [x] 7.1 Plot recall/coverage vs width and score distributions
     - Create `sgnsae/experiments/directional_deviation/plotting.py` to generate deterministic PNG plots from JSON/Tensor artifacts.
     - _Requirements: 5.1, 5.2_
 
-- [ ] 8. Add tests for Protocol B
+- [x] 8. Add tests for Protocol B
   - [x] 8.1 Test synthetic data generation determinism and anomaly correctness
     - Add `unittest` tests that verify shapes, determinism (same seed), and that anomaly samples apply exactly the intended \(\pm\Delta\) shifts and labels.
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
   - [x] 8.2 Test calibration and scoring math
     - Test per-latent quantile thresholding on a small fixed tensor; test `Score_high`/`Score_low` behavior around thresholds.
     - _Requirements: 3.1, 3.2, 3.4, 3.7_
-  - [ ] 8.3 Test directional recall at fixed FPR in controlled cases
+  - [x] 8.3 Test directional recall at fixed FPR in controlled cases
     - Construct controlled tensors where anomalies are guaranteed to exceed thresholds and assert recall \(= 1.0\); verify FPR calibration matches the configured target within tolerance for sufficiently large samples.
     - _Requirements: 3.4, 3.5_
-  - [ ] 8.4 Add a smoke test for the CLI runner on a tiny config
+  - [x] 8.4 Add a smoke test for the CLI runner on a tiny config
     - Add a tiny debug config under `configs/` and a test that runs the runner function directly (not via subprocess) and asserts expected artifacts are created and non-empty.
     - _Requirements: 4.1, 4.2, 5.1_
-  - [ ] 8.5 Add a baseline leakage-prevention test
+  - [x] 8.5 Add a baseline leakage-prevention test
     - Ensure baseline-mode scoring cannot use signed pre-activations to detect both directions with a single latent.
     - _Requirements: 3.3_
-  - [ ] 8.6 Add a streaming-mode smoke test (if implemented)
+  - [x] 8.6 Add a streaming-mode smoke test (if implemented)
     - Run a tiny config with `anomaly_eval_mode="stream"` and assert evaluation completes and artifacts are written.
     - _Requirements: 1.8_

@@ -21,6 +21,10 @@ from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    calibrate_score_thresholds,
+    calibrate_sign_aware_latent_thresholds,
+    calculate_sign_aware_directional_scores,
+    extract_detection_signal,
 )
 from sgnsae.models import GatedSAE
 
@@ -202,6 +206,100 @@ class TestDirectionalDeviationEvaluation(unittest.TestCase):
         self.assertAlmostEqual(evaluation["metrics"]["fpr_high"], 0.0, places=7)
         self.assertAlmostEqual(evaluation["metrics"]["fpr_low"], 0.0, places=7)
         self.assertIsNotNone(evaluation["per_channel"])
+
+    def test_evaluate_directional_deviation_sign_aware_calibrated_thresholds_matches_fpr_target_and_detects_anomalies(
+        self,
+    ) -> None:
+        # given
+        torch.manual_seed(0)
+        model = GatedSAE(
+            n_instances=1,
+            d_in=1,
+            d_hidden=1,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            symmetric_magnitude=False,
+            device=self.device,
+        )
+        with torch.no_grad():
+            model.W_dec.zero_()
+            model.W_dec[0, 0, 0] = 1.0
+            model.b_dec[0] = torch.tensor([0.0], dtype=torch.float32)
+            model.b_enc[0] = torch.tensor([0.0], dtype=torch.float32)
+            model.log_alpha_gate[0] = torch.tensor([0.0], dtype=torch.float32)
+            model.r_mag[0] = torch.tensor([0.0], dtype=torch.float32)
+            model.b_mag[0] = torch.tensor([0.0], dtype=torch.float32)
+
+        num_val = 5000
+        num_test_normal = 5000
+        x_val = torch.randn((num_val, 1), dtype=torch.float32)
+        x_test_normal = torch.randn((num_test_normal, 1), dtype=torch.float32)
+
+        latent_quantile = 0.2
+        score_fpr = 0.05
+
+        pi_val = extract_detection_signal(model, x_val)
+        latent_thresholds = calibrate_sign_aware_latent_thresholds(
+            pi_validation=pi_val,
+            latent_quantile=latent_quantile,
+            min_validation_samples=num_val,
+        )
+        score_high_val, score_low_val = calculate_sign_aware_directional_scores(
+            pi=pi_val, latent_thresholds=latent_thresholds
+        )
+        score_thresholds = calibrate_score_thresholds(
+            score_high_validation=score_high_val,
+            score_low_validation=score_low_val,
+            score_fpr=score_fpr,
+            min_validation_samples=num_val,
+        )
+
+        num_high = 50
+        num_low = 50
+        x_test_anomaly = torch.cat(
+            [
+                torch.full((num_high, 1), 6.0, dtype=torch.float32),
+                torch.full((num_low, 1), -6.0, dtype=torch.float32),
+            ],
+            dim=0,
+        )
+        labels_type = torch.tensor(
+            [LABEL_TYPE_HIGH] * num_high + [LABEL_TYPE_LOW] * num_low, dtype=torch.int64
+        )
+        labels_channel = torch.zeros(num_high + num_low, dtype=torch.int64)
+        anomaly_manifest: Dict[str, Any] = {
+            "shift_mode": "single_channel",
+            "channels_to_evaluate": [0],
+            "num_channels": 1,
+        }
+        anomaly_data = {
+            "x_test_anomaly": x_test_anomaly,
+            "labels_type": labels_type,
+            "labels_channel": labels_channel,
+            "anomaly_stream": None,
+            "anomaly_manifest": anomaly_manifest,
+        }
+
+        # when
+        evaluation = evaluate_directional_deviation(
+            model=model,
+            model_name="gated",
+            scoring_mode="sign_aware",
+            anomaly_data=anomaly_data,
+            x_test_normal=x_test_normal,
+            score_thresholds=score_thresholds,
+            latent_thresholds=latent_thresholds,
+            evaluation_batch_size=512,
+            coverage_recall_target=0.8,
+        )
+
+        # then
+        self.assertAlmostEqual(evaluation["metrics"]["recall_high"], 1.0, places=7)
+        self.assertAlmostEqual(evaluation["metrics"]["recall_low"], 1.0, places=7)
+        self.assertAlmostEqual(
+            evaluation["metrics"]["fpr_high"], score_fpr, delta=0.015
+        )
+        self.assertAlmostEqual(evaluation["metrics"]["fpr_low"], score_fpr, delta=0.015)
 
     def test_evaluate_directional_deviation_subset_mode_does_not_compute_per_channel(
         self,

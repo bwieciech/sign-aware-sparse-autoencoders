@@ -47,6 +47,7 @@ from sgnsae.experiments.directional_deviation.training import (
     persist_model_artifacts,
     run_training_for_variant,
 )
+from sgnsae.experiments.directional_deviation.plotting import generate_plots_for_run
 
 
 _DEFAULT_BATCH_SIZE = 4096
@@ -65,7 +66,13 @@ def _prepare_run_directory(
     config: DirectionalDeviationExperimentConfig,
 ) -> tuple[str, str]:
     run_id = config.run_id or datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    run_dir = os.path.join(config.output_dir, "directional_deviation", run_id)
+    normalized_output = os.path.normpath(config.output_dir)
+    run_parent = (
+        normalized_output
+        if os.path.basename(normalized_output) == "directional_deviation"
+        else os.path.join(normalized_output, "directional_deviation")
+    )
+    run_dir = os.path.join(run_parent, run_id)
     os.makedirs(run_dir, exist_ok=True)
     return run_dir, run_id
 
@@ -369,6 +376,11 @@ def _run_leaf_experiment(
             batch_size=batch_size,
         )
     persist_comparison_summary(run_dir, evaluations_by_model_name)
+    try:
+        generate_plots_for_run(run_dir)
+    except Exception as exc:
+        if config.verbose:
+            print(f"Plot generation failed for run_dir={run_dir}: {exc}")
     return build_comparison_summary(evaluations_by_model_name)
 
 
@@ -452,6 +464,11 @@ def _run_seed_sweep(
     summary_path = os.path.join(run_dir, "comparison_summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
+    try:
+        generate_plots_for_run(run_dir)
+    except Exception as exc:
+        if config.verbose:
+            print(f"Plot generation failed for seed sweep run_dir={run_dir}: {exc}")
     return summary
 
 
@@ -473,11 +490,22 @@ def _run_width_sweep(
             models=_override_models_for_width(config.models, int(width)),
         )
         _persist_run_config(width_config, width_dir)
-        width_summaries[int(width)] = _run_experiment_dispatch(
+        width_summary = _run_experiment_dispatch(
             config=width_config,
             run_dir=width_dir,
             batch_size=batch_size,
         )
+        width_summaries[int(width)] = width_summary
+        width_metrics_path = os.path.join(width_dir, "metrics.json")
+        with open(width_metrics_path, "w") as f:
+            json.dump(
+                {
+                    "width": int(width),
+                    "models": _extract_models_metrics_for_metrics_json(width_summary),
+                },
+                f,
+                indent=2,
+            )
 
     summary = {
         "sweep": {
@@ -489,7 +517,50 @@ def _run_width_sweep(
     summary_path = os.path.join(run_dir, "comparison_summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
+    _persist_per_width_metrics(run_dir=run_dir, width_summaries=width_summaries)
+    try:
+        generate_plots_for_run(run_dir)
+    except Exception as exc:
+        if config.verbose:
+            print(f"Plot generation failed for width sweep run_dir={run_dir}: {exc}")
     return summary
+
+
+def _extract_models_metrics_for_metrics_json(
+    summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    models = summary.get("models") if isinstance(summary, dict) else None
+    if isinstance(models, dict):
+        return models
+    aggregate = (
+        summary.get("aggregate_over_seeds") if isinstance(summary, dict) else None
+    )
+    if isinstance(aggregate, dict) and isinstance(aggregate.get("models"), dict):
+        return aggregate["models"]
+    return {}
+
+
+def _persist_per_width_metrics(
+    run_dir: str,
+    width_summaries: Dict[int, Dict[str, Any]],
+) -> None:
+    per_width_models: Dict[str, Any] = {}
+    widths_sorted = sorted(width_summaries.keys())
+    for width in widths_sorted:
+        per_width_models[str(width)] = _extract_models_metrics_for_metrics_json(
+            width_summaries[width]
+        )
+
+    output_path = os.path.join(run_dir, "per-width metrics.json")
+    with open(output_path, "w") as f:
+        json.dump(
+            {
+                "widths": widths_sorted,
+                "per_width": per_width_models,
+            },
+            f,
+            indent=2,
+        )
 
 
 def _run_experiment_dispatch(
