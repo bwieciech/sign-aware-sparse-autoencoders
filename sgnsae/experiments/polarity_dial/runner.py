@@ -22,11 +22,17 @@ from sgnsae.experiments.polarity_dial.evaluation import (
     persist_alignment_and_calibration,
 )
 from sgnsae.experiments.polarity_dial.plotting import (
+    plot_asymmetry_sweep_calibration,
     plot_calibration_scatter,
     plot_gamma_comparison,
     plot_gamma_histograms,
     plot_gamma_strip,
+    plot_mse_vs_l0_tradeoff,
     plot_training_loss,
+)
+from sgnsae.experiments.polarity_dial.sweeps import (
+    run_asymmetry_sweep,
+    run_sparsity_sweep,
 )
 from sgnsae.experiments.polarity_dial.training import (
     persist_model_artifacts,
@@ -248,4 +254,22 @@ def run_polarity_dial_experiment(config_path: str) -> str:
         },
         os.path.join(run_dir, "gamma_diff_bar_comparison.png"),
     )
+
+    if config.sweeps.sweep_mode in {"sparsity", "both"}:
+        sparsity_summary = run_sparsity_sweep(config, run_dir, data, device)
+        tradeoff_path = os.path.join(run_dir, "mse_vs_l0_tradeoff.json")
+        with open(tradeoff_path, "w") as f:
+            json.dump(sparsity_summary, f, indent=2)
+        plot_mse_vs_l0_tradeoff(
+            sparsity_summary, os.path.join(run_dir, "mse_vs_l0_tradeoff.png")
+        )
+
+    if config.sweeps.sweep_mode in {"asymmetry", "both"}:
+        asymmetry_summary = run_asymmetry_sweep(config, run_dir, device)
+        sweep_path = os.path.join(run_dir, "asymmetry_sweep_summary.json")
+        with open(sweep_path, "w") as f:
+            json.dump(asymmetry_summary, f, indent=2)
+        plot_asymmetry_sweep_calibration(
+            asymmetry_summary, os.path.join(run_dir, "asymmetry_sweep_calibration.png")
+        )
     return run_dir

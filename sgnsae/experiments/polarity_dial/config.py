@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,6 +36,64 @@ def _validate_adam_betas(adam_betas: Tuple[float, float]) -> None:
             raise ValueError(
                 f"{beta_name} must be within (0, 1); received {beta_value}."
             )
+
+
+@dataclass
+class PolarityDialSweepConfig:
+    sparsity_coeff_grid: Optional[List[float]] = None
+    p_plus_grid: Optional[List[float]] = None
+    lognormal_sigma_grid: Optional[List[float]] = None
+    exponential_lambda_grid: Optional[List[float]] = None
+    sweep_mode: str = "none"
+
+    def __post_init__(self) -> None:
+        if self.sweep_mode not in {"none", "sparsity", "asymmetry", "both"}:
+            raise ValueError(
+                "sweep_mode must be one of {'none', 'sparsity', 'asymmetry', 'both'};"
+                f" received {self.sweep_mode}."
+            )
+
+        if self.sweep_mode in {"sparsity", "both"}:
+            if not self.sparsity_coeff_grid:
+                raise ValueError(
+                    "sparsity_coeff_grid must be provided when sweep_mode includes 'sparsity'."
+                )
+            for sparsity_coeff in self.sparsity_coeff_grid:
+                if sparsity_coeff < 0:
+                    raise ValueError(
+                        "sparsity_coeff_grid values must be non-negative; received"
+                        f" {sparsity_coeff}."
+                    )
+
+        if self.sweep_mode in {"asymmetry", "both"}:
+            if not self.p_plus_grid:
+                raise ValueError(
+                    "p_plus_grid must be provided when sweep_mode includes 'asymmetry'."
+                )
+            for p_plus in self.p_plus_grid:
+                _validate_probability(p_plus, "p_plus_grid value")
+
+            has_lognormal_sigma_grid = bool(self.lognormal_sigma_grid)
+            has_exponential_lambda_grid = bool(self.exponential_lambda_grid)
+            if has_lognormal_sigma_grid == has_exponential_lambda_grid:
+                raise ValueError(
+                    "Exactly one of lognormal_sigma_grid or exponential_lambda_grid must"
+                    " be provided when sweep_mode includes 'asymmetry'."
+                )
+            if self.lognormal_sigma_grid:
+                for sigma in self.lognormal_sigma_grid:
+                    if sigma <= 0:
+                        raise ValueError(
+                            "lognormal_sigma_grid values must be positive; received"
+                            f" {sigma}."
+                        )
+            if self.exponential_lambda_grid:
+                for rate in self.exponential_lambda_grid:
+                    if rate <= 0:
+                        raise ValueError(
+                            "exponential_lambda_grid values must be positive; received"
+                            f" {rate}."
+                        )
 
 
 @dataclass
@@ -141,6 +199,7 @@ class PolarityDialExperimentConfig:
     data: PolarityDialDataConfig
     models: List[PolarityDialModelVariantConfig]
     evaluation: PolarityDialEvaluationConfig
+    sweeps: PolarityDialSweepConfig = field(default_factory=PolarityDialSweepConfig)
     run_id: Optional[str] = None
     log_every_n_steps: int = 25
     log_every_n_epochs: int = 1
@@ -179,6 +238,22 @@ def _load_raw_config(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _infer_sweep_mode(sweeps_raw: Dict[str, Any]) -> str:
+    has_sparsity = bool(sweeps_raw.get("sparsity_coeff_grid"))
+    has_asymmetry = (
+        bool(sweeps_raw.get("p_plus_grid"))
+        or bool(sweeps_raw.get("lognormal_sigma_grid"))
+        or bool(sweeps_raw.get("exponential_lambda_grid"))
+    )
+    if has_sparsity and has_asymmetry:
+        return "both"
+    if has_sparsity:
+        return "sparsity"
+    if has_asymmetry:
+        return "asymmetry"
+    return "none"
+
+
 def load_experiment_config(path: str) -> PolarityDialExperimentConfig:
     raw_config = _load_raw_config(path)
     if "data" not in raw_config or "models" not in raw_config:
@@ -208,12 +283,26 @@ def load_experiment_config(path: str) -> PolarityDialExperimentConfig:
             ],
         }
     evaluation_config = PolarityDialEvaluationConfig(**evaluation_raw)
+
+    sweeps_raw = raw_config.get("sweeps") or {}
+    if not isinstance(sweeps_raw, dict):
+        raise ValueError("The 'sweeps' section must be an object when provided.")
+    sweeps_raw = dict(sweeps_raw)
+    if "sparsity_coeff_grid" not in sweeps_raw and "sparsity_coeff_grid" in raw_config:
+        sweeps_raw["sparsity_coeff_grid"] = raw_config["sparsity_coeff_grid"]
+    if "p_plus_grid" not in sweeps_raw and "p_plus_grid" in raw_config:
+        sweeps_raw["p_plus_grid"] = raw_config["p_plus_grid"]
+    if "sweep_mode" not in sweeps_raw:
+        sweeps_raw["sweep_mode"] = _infer_sweep_mode(sweeps_raw)
+    sweep_config = PolarityDialSweepConfig(**sweeps_raw)
+
     experiment_config = PolarityDialExperimentConfig(
         output_dir=raw_config["output_dir"],
         device=raw_config.get("device", "auto"),
         data=data_config,
         models=model_configs,
         evaluation=evaluation_config,
+        sweeps=sweep_config,
         run_id=raw_config.get("run_id"),
         log_every_n_steps=raw_config.get("log_every_n_steps", 25),
         log_every_n_epochs=raw_config.get("log_every_n_epochs", 1),

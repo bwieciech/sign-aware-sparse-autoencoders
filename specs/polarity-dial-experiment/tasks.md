@@ -203,13 +203,13 @@
     - Add minimal tests ensuring it can produce negative coefficients and that evaluation does not crash.
     - _Requirements: 6.1, 6.2_
 
-- [ ] 11. Implement sweep runners for trade-off curves and the "polarity dial"
-  - [ ] 11.1 Sparsity-fidelity sweep (MSE vs \(L_0\))
+- [x] 11. Implement sweep runners for trade-off curves and the "polarity dial"
+  - [x] 11.1 Sparsity-fidelity sweep (MSE vs \(L_0\))
     - Add `sparsity_coeff_grid` to config and run training+evaluation for each \(\lambda\) per model variant.
     - Output `mse_vs_l0_tradeoff.json` and `mse_vs_l0_tradeoff.png`.
     - Ensure sweep runs are deterministic and subdirectories include the sweep parameter value in their names.
     - _Requirements: 4.5, 6.3_
-  - [ ] 11.2 Asymmetry sweep (dial)
+  - [x] 11.2 Asymmetry sweep (dial)
     - Add `p_plus_grid` and at least one tail-heaviness grid (`exponential_lambda_grid` and/or `lognormal_sigma_grid`).
     - For each grid point, generate a dataset (shared across models), train, evaluate, and aggregate results into `asymmetry_sweep_summary.json`.
     - Produce `asymmetry_sweep_calibration.png` showing mean `rel_error_plus` and `rel_error_minus` vs the sweep axis.
