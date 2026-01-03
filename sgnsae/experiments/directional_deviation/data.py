@@ -3,7 +3,7 @@ import math
 import os
 import random
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -22,6 +22,7 @@ LABEL_TYPE_LOW = 2
 _TORCH_SEED_MODULUS = 2**63
 _NUMPY_SEED_MODULUS = 2**32
 _UNIFORM_EPSILON = 1e-6
+_DIRECTION_EPSILON = 1e-8
 
 
 def set_random_seed(seed: int) -> None:
@@ -40,6 +41,175 @@ def _create_cpu_generator(seed: int) -> torch.Generator:
     generator = torch.Generator(device="cpu")
     generator.manual_seed(_normalize_torch_seed(seed))
     return generator
+
+
+def _validate_positive_int(value: int, name: str) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be positive; received {value}.")
+
+
+def _validate_feature_directions(
+    directions: Tensor,
+    data_config: DirectionalDeviationDataConfig,
+    anomaly_config: DirectionalDeviationAnomalyConfig,
+) -> None:
+    if anomaly_config.num_directions is None:
+        raise ValueError(
+            "num_directions must be provided when shift_mode='feature_direction'."
+        )
+    _validate_positive_int(int(anomaly_config.num_directions), "num_directions")
+    if directions.ndim != 2:
+        raise ValueError(f"Expected directions.ndim == 2, got {directions.ndim}.")
+    if directions.shape[0] != int(anomaly_config.num_directions):
+        raise ValueError(
+            "Expected directions.shape[0] == num_directions, got "
+            f"{directions.shape[0]} vs {anomaly_config.num_directions}."
+        )
+    if directions.shape[1] != int(data_config.num_channels):
+        raise ValueError(
+            "Expected directions.shape[1] == num_channels, got "
+            f"{directions.shape[1]} vs {data_config.num_channels}."
+        )
+
+
+def _extract_decoder_matrix(model: torch.nn.Module) -> Tensor:
+    if not hasattr(model, "W_dec"):
+        raise ValueError("Model is missing required attribute W_dec.")
+    decoder = getattr(model, "W_dec")
+    if not isinstance(decoder, Tensor):
+        raise ValueError("Model attribute W_dec must be a torch.Tensor.")
+    if decoder.ndim != 3:
+        raise ValueError(f"Expected W_dec.ndim == 3, got {decoder.ndim}.")
+    if not hasattr(model, "n_instances") or int(getattr(model, "n_instances")) != 1:
+        raise ValueError(
+            "Feature-direction extraction requires model.n_instances == 1."
+        )
+    return decoder[0].detach().to(device="cpu")
+
+
+def _calculate_latent_purity(decoder: Tensor) -> Tensor:
+    if decoder.ndim != 2:
+        raise ValueError(f"Expected decoder.ndim == 2, got {decoder.ndim}.")
+    max_abs = decoder.abs().max(dim=0).values
+    norms = torch.linalg.norm(decoder, dim=0)
+    return max_abs / (norms + _DIRECTION_EPSILON)
+
+
+def _select_latent_indices_top_purity(purity: Tensor, num_directions: int) -> List[int]:
+    purity_values = [float(value) for value in purity.cpu().tolist()]
+    indices = list(range(len(purity_values)))
+    indices.sort(key=lambda idx: (-purity_values[idx], idx))
+    return [int(idx) for idx in indices[:num_directions]]
+
+
+def _select_latent_indices_random(
+    num_latents: int,
+    num_directions: int,
+    generator: torch.Generator,
+) -> List[int]:
+    if num_directions > num_latents:
+        raise ValueError(
+            "num_directions must be <= the number of available latents; received "
+            f"num_directions={num_directions} and num_latents={num_latents}."
+        )
+    perm = torch.randperm(num_latents, generator=generator, device="cpu")
+    return [int(value) for value in perm[:num_directions].tolist()]
+
+
+def build_feature_directions_from_decoder(
+    model: torch.nn.Module,
+    anomaly_config: DirectionalDeviationAnomalyConfig,
+    direction_seed: int,
+) -> Tuple[Tensor, Dict[str, Any]]:
+    if anomaly_config.shift_mode != "feature_direction":
+        raise ValueError(
+            "build_feature_directions_from_decoder requires shift_mode='feature_direction'."
+        )
+    if anomaly_config.num_directions is None:
+        raise ValueError("num_directions must be provided.")
+
+    decoder = _extract_decoder_matrix(model)
+    purity = _calculate_latent_purity(decoder)
+    num_directions = int(anomaly_config.num_directions)
+    num_latents = int(decoder.shape[1])
+
+    selection = anomaly_config.direction_selection
+    if selection is None:
+        raise ValueError(
+            "direction_selection must be provided when shift_mode='feature_direction'."
+        )
+    if selection == "top_purity":
+        latent_indices = _select_latent_indices_top_purity(purity, num_directions)
+    elif selection == "random":
+        generator = _create_cpu_generator(direction_seed)
+        latent_indices = _select_latent_indices_random(
+            num_latents=num_latents,
+            num_directions=num_directions,
+            generator=generator,
+        )
+    elif selection == "explicit":
+        if anomaly_config.direction_latent_indices is None:
+            raise ValueError(
+                "direction_latent_indices must be provided when direction_selection='explicit'."
+            )
+        latent_indices = [
+            int(value) for value in anomaly_config.direction_latent_indices
+        ]
+    else:
+        raise ValueError(f"Unsupported direction_selection={selection}.")
+
+    if any(index >= num_latents for index in latent_indices):
+        raise ValueError(
+            "direction_latent_indices entries must be < the decoder width; received "
+            f"indices={latent_indices} and decoder_width={num_latents}."
+        )
+
+    directions = decoder[:, latent_indices].T.to(dtype=torch.float32)
+    if anomaly_config.normalize_directions:
+        norms = torch.linalg.norm(directions, dim=1, keepdim=True)
+        directions = directions / (norms + _DIRECTION_EPSILON)
+
+    selected_purity = [float(value) for value in purity[latent_indices].tolist()]
+    metadata: Dict[str, Any] = {
+        "direction_source": anomaly_config.direction_source,
+        "direction_selection": selection,
+        "direction_latent_indices": latent_indices,
+        "direction_latent_purity": selected_purity,
+        "normalize_directions": bool(anomaly_config.normalize_directions),
+        "seed_plan": {"direction_seed": _normalize_torch_seed(direction_seed)},
+    }
+    return directions, metadata
+
+
+def build_fixed_random_directions(
+    data_config: DirectionalDeviationDataConfig,
+    anomaly_config: DirectionalDeviationAnomalyConfig,
+    direction_seed: int,
+) -> Tuple[Tensor, Dict[str, Any]]:
+    if anomaly_config.shift_mode != "feature_direction":
+        raise ValueError(
+            "build_fixed_random_directions requires shift_mode='feature_direction'."
+        )
+    if anomaly_config.num_directions is None:
+        raise ValueError("num_directions must be provided.")
+    generator = _create_cpu_generator(direction_seed)
+    num_directions = int(anomaly_config.num_directions)
+    directions = torch.randn(
+        (num_directions, data_config.num_channels),
+        device="cpu",
+        dtype=torch.float32,
+        generator=generator,
+    )
+    if anomaly_config.normalize_directions:
+        norms = torch.linalg.norm(directions, dim=1, keepdim=True)
+        directions = directions / (norms + _DIRECTION_EPSILON)
+
+    metadata: Dict[str, Any] = {
+        "direction_source": "fixed_random",
+        "normalize_directions": bool(anomaly_config.normalize_directions),
+        "seed_plan": {"direction_seed": _normalize_torch_seed(direction_seed)},
+    }
+    return directions, metadata
 
 
 def _sample_iid_non_gaussian_split(
@@ -244,6 +414,72 @@ def _build_anomaly_manifest(
     }
 
 
+def _build_feature_direction_anomaly_manifest(
+    data_config: DirectionalDeviationDataConfig,
+    anomaly_config: DirectionalDeviationAnomalyConfig,
+    direction_metadata: Dict[str, Any],
+    direction_seed: int,
+    sample_seed: int,
+) -> Dict[str, Any]:
+    if anomaly_config.shift_mode != "feature_direction":
+        raise ValueError(
+            "_build_feature_direction_anomaly_manifest requires shift_mode='feature_direction'."
+        )
+    if anomaly_config.num_directions is None:
+        raise ValueError("num_directions must be provided.")
+    num_directions = int(anomaly_config.num_directions)
+
+    num_high = (
+        int(anomaly_config.num_test_high_per_direction)
+        if anomaly_config.num_test_high_per_direction is not None
+        else int(data_config.num_test_high_per_channel)
+    )
+    num_low = (
+        int(anomaly_config.num_test_low_per_direction)
+        if anomaly_config.num_test_low_per_direction is not None
+        else int(data_config.num_test_low_per_channel)
+    )
+    total_high = num_directions * num_high
+    total_low = num_directions * num_low
+
+    return {
+        "delta": anomaly_config.delta,
+        "shift_mode": anomaly_config.shift_mode,
+        "target_kind": "direction",
+        "num_channels": data_config.num_channels,
+        "num_directions": num_directions,
+        "direction_source": anomaly_config.direction_source,
+        "reference_model_name": (
+            anomaly_config.reference_model_name
+            if anomaly_config.direction_source == "reference_model_decoder"
+            else None
+        ),
+        "direction_selection": direction_metadata.get(
+            "direction_selection", anomaly_config.direction_selection
+        ),
+        "direction_latent_indices": direction_metadata.get("direction_latent_indices"),
+        "direction_latent_purity": direction_metadata.get("direction_latent_purity"),
+        "normalize_directions": bool(anomaly_config.normalize_directions),
+        "direction_indices_to_evaluate": list(range(num_directions)),
+        "num_test_high_per_direction": num_high,
+        "num_test_low_per_direction": num_low,
+        "counts": {
+            "high": total_high,
+            "low": total_low,
+            "total": total_high + total_low,
+        },
+        "label_mapping": {
+            "normal": LABEL_TYPE_NORMAL,
+            "high": LABEL_TYPE_HIGH,
+            "low": LABEL_TYPE_LOW,
+        },
+        "seed_plan": {
+            "direction_seed": _normalize_torch_seed(direction_seed),
+            "sample_seed": _normalize_torch_seed(sample_seed),
+        },
+    }
+
+
 @dataclass(frozen=True)
 class DirectionalDeviationAnomalyBatch:
     x: Tensor
@@ -393,8 +629,71 @@ def generate_anomaly_test_data(
     anomaly_config: DirectionalDeviationAnomalyConfig,
     device: str,
     batch_size: int = 4096,
+    anomaly_directions: Optional[Tensor] = None,
+    direction_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     set_random_seed(data_config.seed)
+
+    if anomaly_config.shift_mode == "feature_direction":
+        direction_seed = data_config.seed + 6
+        sample_seed = data_config.seed + 4
+
+        directions: Tensor
+        resolved_metadata: Dict[str, Any]
+        if anomaly_directions is None:
+            if anomaly_config.direction_source != "fixed_random":
+                raise ValueError(
+                    "anomaly_directions must be provided when shift_mode='feature_direction' "
+                    "unless direction_source='fixed_random'."
+                )
+            directions, resolved_metadata = build_fixed_random_directions(
+                data_config=data_config,
+                anomaly_config=anomaly_config,
+                direction_seed=direction_seed,
+            )
+        else:
+            directions = anomaly_directions.detach().to(
+                device="cpu", dtype=torch.float32
+            )
+            resolved_metadata = (
+                {} if direction_metadata is None else dict(direction_metadata)
+            )
+
+        _validate_feature_directions(
+            directions=directions,
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+        )
+        anomaly_stream = DirectionalDeviationFeatureDirectionAnomalyStream(
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+            device=device,
+            batch_size=batch_size,
+            directions=directions,
+            sample_seed=sample_seed,
+        )
+        manifest = _build_feature_direction_anomaly_manifest(
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+            direction_metadata=resolved_metadata,
+            direction_seed=direction_seed,
+            sample_seed=sample_seed,
+        )
+
+        if data_config.anomaly_eval_mode == "stream":
+            return {
+                "anomaly_stream": anomaly_stream,
+                "anomaly_manifest": manifest,
+                "anomaly_directions": directions,
+            }
+
+        materialized = _materialize_anomaly_stream(anomaly_stream)
+        return {
+            **materialized,
+            "anomaly_manifest": manifest,
+            "anomaly_stream": None,
+            "anomaly_directions": directions,
+        }
 
     channels_to_evaluate = _resolve_channels_to_evaluate(
         data_config.num_channels, anomaly_config.channels_to_evaluate
@@ -431,8 +730,91 @@ def generate_anomaly_test_data(
     return {**materialized, "anomaly_manifest": manifest, "anomaly_stream": None}
 
 
+@dataclass(frozen=True)
+class DirectionalDeviationFeatureDirectionAnomalyStream:
+    data_config: DirectionalDeviationDataConfig
+    anomaly_config: DirectionalDeviationAnomalyConfig
+    device: str
+    batch_size: int
+    directions: Tensor
+    sample_seed: int
+
+    def __iter__(self) -> Iterator[DirectionalDeviationAnomalyBatch]:
+        if self.anomaly_config.shift_mode != "feature_direction":
+            raise ValueError(
+                "DirectionalDeviationFeatureDirectionAnomalyStream requires shift_mode='feature_direction'."
+            )
+        _validate_feature_directions(
+            directions=self.directions,
+            data_config=self.data_config,
+            anomaly_config=self.anomaly_config,
+        )
+        generator = _create_cpu_generator(self.sample_seed)
+
+        num_high = (
+            int(self.anomaly_config.num_test_high_per_direction)
+            if self.anomaly_config.num_test_high_per_direction is not None
+            else int(self.data_config.num_test_high_per_channel)
+        )
+        num_low = (
+            int(self.anomaly_config.num_test_low_per_direction)
+            if self.anomaly_config.num_test_low_per_direction is not None
+            else int(self.data_config.num_test_low_per_channel)
+        )
+        delta = float(self.anomaly_config.delta)
+        directions_cpu = self.directions.to(device="cpu", dtype=torch.float32)
+
+        for direction_index in range(int(directions_cpu.shape[0])):
+            direction_vector = directions_cpu[direction_index]
+            yield from self._iter_direction(
+                generator=generator,
+                direction_index=int(direction_index),
+                direction_vector=direction_vector,
+                label_type=LABEL_TYPE_HIGH,
+                delta=delta,
+                num_samples=num_high,
+            )
+            yield from self._iter_direction(
+                generator=generator,
+                direction_index=int(direction_index),
+                direction_vector=direction_vector,
+                label_type=LABEL_TYPE_LOW,
+                delta=-delta,
+                num_samples=num_low,
+            )
+
+    def _iter_direction(
+        self,
+        generator: torch.Generator,
+        direction_index: int,
+        direction_vector: Tensor,
+        label_type: int,
+        delta: float,
+        num_samples: int,
+    ) -> Iterator[DirectionalDeviationAnomalyBatch]:
+        for batch_count in _iterate_batch_counts(num_samples, self.batch_size):
+            batch = _sample_normal_split(batch_count, self.data_config, generator)
+            shifted = batch + delta * direction_vector.unsqueeze(0)
+            yield DirectionalDeviationAnomalyBatch(
+                x=shifted.to(self.device),
+                labels_type=torch.full(
+                    (batch_count,),
+                    label_type,
+                    dtype=torch.int64,
+                    device=self.device,
+                ),
+                labels_channel=torch.full(
+                    (batch_count,),
+                    direction_index,
+                    dtype=torch.int64,
+                    device=self.device,
+                ),
+                labels_mask=None,
+            )
+
+
 def _materialize_anomaly_stream(
-    anomaly_stream: DirectionalDeviationAnomalyStream,
+    anomaly_stream: Iterator[DirectionalDeviationAnomalyBatch],
 ) -> Dict[str, Tensor]:
     x_batches: List[Tensor] = []
     labels_type_batches: List[Tensor] = []
@@ -491,6 +873,7 @@ def export_data_summary(
         "test_normal_seed": _normalize_torch_seed(data_config.seed + 2),
         "subset_seed": _normalize_torch_seed(data_config.seed + 3),
         "anomaly_seed": _normalize_torch_seed(data_config.seed + 4),
+        "direction_seed": _normalize_torch_seed(data_config.seed + 6),
     }
     generator_config_path = os.path.join(data_dir, "generator_config.json")
     with open(generator_config_path, "w") as f:
@@ -499,6 +882,13 @@ def export_data_summary(
     anomaly_manifest_path = os.path.join(data_dir, "anomaly_manifest.json")
     with open(anomaly_manifest_path, "w") as f:
         json.dump(anomaly_data["anomaly_manifest"], f, indent=2)
+
+    anomaly_directions = anomaly_data.get("anomaly_directions")
+    if isinstance(anomaly_directions, Tensor):
+        torch.save(
+            anomaly_directions.detach().to(device="cpu"),
+            os.path.join(data_dir, "anomaly_directions.pt"),
+        )
 
     preview = _collect_sampled_preview(
         normal_data=normal_data,
@@ -557,11 +947,12 @@ def _collect_anomaly_preview(
             "Expected anomaly_data to contain either x_test_anomaly or anomaly_stream."
         )
 
-    anomaly_stream: DirectionalDeviationAnomalyStream = anomaly_data["anomaly_stream"]
-    num_channels = anomaly_stream.data_config.num_channels
-    subset_size = (
-        len(anomaly_stream.subset_indices) if anomaly_stream.subset_indices else 0
-    )
+    anomaly_stream = anomaly_data["anomaly_stream"]
+    if not hasattr(anomaly_stream, "data_config"):
+        raise ValueError("anomaly_stream is missing required attribute data_config.")
+    num_channels = int(getattr(anomaly_stream, "data_config").num_channels)
+    subset_indices = getattr(anomaly_stream, "subset_indices", None)
+    subset_size = len(subset_indices) if subset_indices else 0
     x_batches: List[Tensor] = []
     labels_type_batches: List[Tensor] = []
     labels_channel_batches: List[Tensor] = []

@@ -143,25 +143,25 @@
     - Add `unittest` coverage for determinism (same seed) and variance sanity checks for each `normal_mode`.
     - _Requirements: R7_
 
-- [ ] 10. Add feature-direction anomaly mode (5B)
-  - [ ] 10.1 Extend `DirectionalDeviationAnomalyConfig` to support `shift_mode="feature_direction"`
+- [x] 10. Add feature-direction anomaly mode (5B)
+  - [x] 10.1 Extend `DirectionalDeviationAnomalyConfig` to support `shift_mode="feature_direction"`
     - Add fields: `direction_source`, `num_directions`, `reference_model_name`, `direction_selection`, `direction_latent_indices`, `normalize_directions`, and per-direction anomaly counts.
     - Validate: `num_directions > 0`, `direction_latent_indices` present when `direction_selection="explicit"`, and counts are positive.
     - _Requirements: R1, R3_
-  - [ ] 10.2 Implement direction extraction from a reference model decoder
+  - [x] 10.2 Implement direction extraction from a reference model decoder
     - Add a helper to compute per-latent purity `max_j |D[j,i]| / ||D[:,i]||_2`, then select directions by `top_purity`, `random`, or `explicit`.
     - Write `data/anomaly_directions.pt` (shape `M x N`) and `data/anomaly_manifest.json` recording direction source, selection, and the chosen latent indices.
     - _Requirements: R3, R6_
-  - [ ] 10.3 Implement streamable anomaly generation along learned directions
+  - [x] 10.3 Implement streamable anomaly generation along learned directions
     - Generate anomalies as `x' = x ± Δ v_k` with labels `labels_type ∈ {1,2}` and `labels_target = k`, and do not require materializing all anomalies in memory.
     - _Requirements: R3, R6_
-  - [ ] 10.4 Update the runner to respect ordering constraints for `reference_model_decoder`
+  - [x] 10.4 Update the runner to respect ordering constraints for `reference_model_decoder`
     - Ensure `reference_model_name` is trained before building feature directions, then reuse the same direction set for evaluating all model variants within the same leaf run.
     - _Requirements: R3, R6_
-  - [ ] 10.5 Extend evaluation to support `target_kind="direction"`
+  - [x] 10.5 Extend evaluation to support `target_kind="direction"`
     - Compute per-direction recall arrays, direction coverage, and persist `target_kind` and `num_targets` in evaluation artifacts and the run-level comparison summary.
     - _Requirements: R5, R6_
-  - [ ] 10.6 Add tests for feature-direction anomaly mode
+  - [x] 10.6 Add tests for feature-direction anomaly mode
     - Test determinism of direction selection, and verify perturbations satisfy `x_anom - x_base = ±Δ v_k` within tolerance.
     - _Requirements: R7_
 

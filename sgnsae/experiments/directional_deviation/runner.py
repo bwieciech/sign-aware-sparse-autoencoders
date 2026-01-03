@@ -16,6 +16,7 @@ from sgnsae.experiments.directional_deviation.config import (
     load_experiment_config,
 )
 from sgnsae.experiments.directional_deviation.data import (
+    build_feature_directions_from_decoder,
     export_data_summary,
     generate_anomaly_test_data,
     generate_normal_data,
@@ -152,8 +153,12 @@ def _calibrate_and_persist_thresholds(
     score_fpr = float(experiment_config.thresholds.score_fpr)
 
     shift_mode = anomaly_manifest.get("shift_mode")
-    if shift_mode not in {"single_channel", "subset"}:
+    if shift_mode not in {"single_channel", "subset", "feature_direction"}:
         raise ValueError(f"Unsupported shift_mode in anomaly_manifest: {shift_mode}.")
+
+    baseline_shift_mode: Literal["single_channel", "subset"] = (
+        "single_channel" if shift_mode == "feature_direction" else shift_mode
+    )
 
     subset_indices_raw = anomaly_manifest.get("subset_indices")
     subset_indices = (
@@ -193,7 +198,7 @@ def _calibrate_and_persist_thresholds(
             scoring_mode=scoring_mode,
             latent_quantile=latent_quantile,
             score_thresholds=score_thresholds,
-            shift_mode=shift_mode,
+            shift_mode=baseline_shift_mode,
             subset_indices=subset_indices,
         )
         persist_sign_aware_threshold_artifacts(
@@ -216,7 +221,7 @@ def _calibrate_and_persist_thresholds(
     )
     latent_directions = assign_baseline_latent_directions(
         model=model,
-        shift_mode=shift_mode,
+        shift_mode=baseline_shift_mode,
         subset_indices=subset_indices,
     ).to("cpu")
     baseline_thresholds_cpu = calibrate_baseline_evidence_thresholds(
@@ -240,7 +245,7 @@ def _calibrate_and_persist_thresholds(
         scoring_mode=scoring_mode,
         latent_quantile=latent_quantile,
         score_thresholds=score_thresholds,
-        shift_mode=shift_mode,
+        shift_mode=baseline_shift_mode,
         subset_indices=subset_indices,
     )
     persist_baseline_threshold_artifacts(
@@ -285,18 +290,20 @@ def _run_single_model(
     normal_data: Dict[str, Tensor],
     anomaly_data: Dict[str, Any],
     batch_size: int,
+    training_output: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     model_dir = os.path.join(run_dir, "models", model_config.name)
     os.makedirs(model_dir, exist_ok=True)
 
     scoring_mode = _determine_scoring_mode(model_config)
     try:
-        training_output = run_training_for_variant(
-            experiment_config=experiment_config,
-            data=normal_data,
-            model_config=model_config,
-            device=experiment_config.device,
-        )
+        if training_output is None:
+            training_output = run_training_for_variant(
+                experiment_config=experiment_config,
+                data=normal_data,
+                model_config=model_config,
+                device=experiment_config.device,
+            )
         model = training_output["model"]
         persist_model_artifacts(
             model=model,
@@ -350,31 +357,104 @@ def _run_leaf_experiment(
 
     set_random_seed(config.data.seed)
     normal_data = generate_normal_data(config.data, config.device)
-    anomaly_data = generate_anomaly_test_data(
-        data_config=config.data,
-        anomaly_config=config.anomaly,
-        device=config.device,
-        batch_size=batch_size,
-    )
-    export_data_summary(
-        run_dir=run_dir,
-        data_config=config.data,
-        anomaly_config=config.anomaly,
-        normal_data=normal_data,
-        anomaly_data=anomaly_data,
-    )
 
     evaluations_by_model_name: Dict[str, Dict[str, Any]] = {}
-    for model_config in config.models:
-        set_random_seed(_stable_model_seed(config.data.seed, model_config.name))
-        evaluations_by_model_name[model_config.name] = _run_single_model(
+    if (
+        config.anomaly.shift_mode == "feature_direction"
+        and config.anomaly.direction_source == "per_model_decoder"
+    ):
+        raise ValueError(
+            "direction_source='per_model_decoder' is not supported by the runner. "
+            "Use direction_source='reference_model_decoder' or 'fixed_random'."
+        )
+    if (
+        config.anomaly.shift_mode == "feature_direction"
+        and config.anomaly.direction_source == "reference_model_decoder"
+    ):
+        reference_model_name = config.anomaly.reference_model_name
+        reference_model_config = next(
+            (
+                model_config
+                for model_config in config.models
+                if model_config.name == reference_model_name
+            ),
+            None,
+        )
+        if reference_model_config is None:
+            raise ValueError(
+                "reference_model_name must match a model name in config.models; "
+                f"received reference_model_name='{reference_model_name}'."
+            )
+
+        set_random_seed(_stable_model_seed(config.data.seed, reference_model_name))
+        reference_training_output = run_training_for_variant(
             experiment_config=config,
+            data=normal_data,
+            model_config=reference_model_config,
+            device=config.device,
+        )
+        direction_seed = config.data.seed + 6
+        anomaly_directions, direction_metadata = build_feature_directions_from_decoder(
+            model=reference_training_output["model"],
+            anomaly_config=config.anomaly,
+            direction_seed=direction_seed,
+        )
+        anomaly_data = generate_anomaly_test_data(
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            device=config.device,
+            batch_size=batch_size,
+            anomaly_directions=anomaly_directions,
+            direction_metadata=direction_metadata,
+        )
+        export_data_summary(
             run_dir=run_dir,
-            model_config=model_config,
+            data_config=config.data,
+            anomaly_config=config.anomaly,
             normal_data=normal_data,
             anomaly_data=anomaly_data,
+        )
+
+        for model_config in config.models:
+            set_random_seed(_stable_model_seed(config.data.seed, model_config.name))
+            evaluations_by_model_name[model_config.name] = _run_single_model(
+                experiment_config=config,
+                run_dir=run_dir,
+                model_config=model_config,
+                normal_data=normal_data,
+                anomaly_data=anomaly_data,
+                batch_size=batch_size,
+                training_output=(
+                    reference_training_output
+                    if model_config.name == reference_model_name
+                    else None
+                ),
+            )
+    else:
+        anomaly_data = generate_anomaly_test_data(
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            device=config.device,
             batch_size=batch_size,
         )
+        export_data_summary(
+            run_dir=run_dir,
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            normal_data=normal_data,
+            anomaly_data=anomaly_data,
+        )
+
+        for model_config in config.models:
+            set_random_seed(_stable_model_seed(config.data.seed, model_config.name))
+            evaluations_by_model_name[model_config.name] = _run_single_model(
+                experiment_config=config,
+                run_dir=run_dir,
+                model_config=model_config,
+                normal_data=normal_data,
+                anomaly_data=anomaly_data,
+                batch_size=batch_size,
+            )
     persist_comparison_summary(run_dir, evaluations_by_model_name)
     try:
         generate_plots_for_run(run_dir)

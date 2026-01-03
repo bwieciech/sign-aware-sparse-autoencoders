@@ -208,6 +208,155 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 **{**base_kwargs, "train_anomaly_fraction": 1.1}
             )
 
+    def test_anomaly_config_feature_direction_requires_num_directions(self) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0, shift_mode="feature_direction"
+            )
+
+    def test_anomaly_config_feature_direction_explicit_requires_latent_indices(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                num_directions=2,
+                direction_selection="explicit",
+            )
+
+    def test_anomaly_config_feature_direction_explicit_rejects_invalid_latent_indices(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "delta": 1.0,
+            "shift_mode": "feature_direction",
+            "num_directions": 2,
+            "direction_selection": "explicit",
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **{**base_kwargs, "direction_latent_indices": [0]}
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **{**base_kwargs, "direction_latent_indices": [0, 0]}
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **{**base_kwargs, "direction_latent_indices": [-1, 1]}
+            )
+
+    def test_anomaly_config_rejects_feature_fields_for_non_feature_shift_modes(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="single_channel",
+                num_directions=2,
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="subset",
+                subset_size=1,
+                direction_selection="top_purity",
+            )
+
+    def test_anomaly_config_feature_direction_rejects_non_positive_per_direction_counts(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "delta": 1.0,
+            "shift_mode": "feature_direction",
+            "num_directions": 2,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **{**base_kwargs, "num_test_high_per_direction": 0}
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **{**base_kwargs, "num_test_low_per_direction": 0}
+            )
+
+    def test_anomaly_config_feature_direction_rejects_channels_to_evaluate(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="fixed_random",
+                num_directions=1,
+                channels_to_evaluate=[0],
+            )
+
+    def test_anomaly_config_feature_direction_rejects_invalid_direction_source_and_selection(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="unsupported",  # type: ignore[arg-type]
+                num_directions=1,
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="fixed_random",
+                num_directions=1,
+                direction_selection="unsupported",  # type: ignore[arg-type]
+            )
+
+    def test_anomaly_config_feature_direction_rejects_latent_indices_when_not_explicit(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="reference_model_decoder",
+                num_directions=2,
+                direction_selection="random",
+                direction_latent_indices=[0, 1],
+            )
+
+    def test_anomaly_config_feature_direction_requires_reference_model_name(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="reference_model_decoder",
+                num_directions=1,
+                reference_model_name="",
+            )
+
     def test_threshold_config_rejects_invalid_quantile_and_fpr(self) -> None:
         # given
         base_kwargs = {
@@ -233,6 +382,357 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationThresholdConfig(
                 **{**base_kwargs, "score_fpr": 1.0}
+            )
+
+    def test_experiment_config_rejects_train_anomaly_fraction_for_feature_direction(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=4,
+            train_anomaly_fraction=0.1,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="fixed_random",
+            num_directions=1,
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="relu_sae",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+            )
+
+    def test_experiment_config_feature_direction_requires_reference_model_in_models(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=4,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=1,
+            reference_model_name="missing",
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="relu_sae",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+            )
+
+    def test_experiment_config_feature_direction_width_sweep_requires_widths_at_least_num_directions(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=10,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=3,
+            reference_model_name="ref",
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="ref",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+                width_sweep=[1, 2],
+            )
+
+    def test_experiment_config_feature_direction_requires_reference_model_width_at_least_num_directions(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=10,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=3,
+            reference_model_name="ref",
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        reference_model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="ref",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+        other_model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="other",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[reference_model_config, other_model_config],
+            )
+
+    def test_experiment_config_feature_direction_rejects_out_of_range_direction_latent_indices(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=10,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=2,
+            reference_model_name="ref",
+            direction_selection="explicit",
+            direction_latent_indices=[0, 3],
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        reference_model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="ref",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=3,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[reference_model_config],
+            )
+
+    def test_experiment_config_feature_direction_per_model_decoder_requires_all_models_wide_enough(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=10,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="per_model_decoder",
+            num_directions=2,
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        small_model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="small",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=1,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[small_model_config],
+            )
+
+    def test_experiment_config_feature_direction_per_model_decoder_width_sweep_requires_widths_at_least_num_directions(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=10,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="per_model_decoder",
+            num_directions=3,
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="model",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=1,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+                width_sweep=[1, 2],
             )
 
     def test_experiment_config_rejects_d_hidden_not_less_than_num_channels(

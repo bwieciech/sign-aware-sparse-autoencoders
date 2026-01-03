@@ -17,6 +17,7 @@ from sgnsae.experiments.directional_deviation.data import (
     LABEL_TYPE_HIGH,
     LABEL_TYPE_LOW,
     DirectionalDeviationAnomalyStream,
+    build_feature_directions_from_decoder,
     export_data_summary,
     generate_anomaly_test_data,
     generate_normal_data,
@@ -176,6 +177,64 @@ def _build_expected_subset_anomalies(
         "labels_type": torch.cat(labels_type_batches, dim=0),
         "labels_channel": torch.cat(labels_channel_batches, dim=0),
         "labels_mask": torch.cat(labels_mask_batches, dim=0),
+    }
+
+
+def _build_expected_feature_direction_anomalies(
+    data_config: DirectionalDeviationDataConfig,
+    anomaly_config: DirectionalDeviationAnomalyConfig,
+    directions: Tensor,
+    sample_seed: int,
+    batch_size: int,
+    device: str,
+) -> Dict[str, Tensor]:
+    generator = data_module._create_cpu_generator(sample_seed)
+    num_high = (
+        int(anomaly_config.num_test_high_per_direction)
+        if anomaly_config.num_test_high_per_direction is not None
+        else int(data_config.num_test_high_per_channel)
+    )
+    num_low = (
+        int(anomaly_config.num_test_low_per_direction)
+        if anomaly_config.num_test_low_per_direction is not None
+        else int(data_config.num_test_low_per_channel)
+    )
+    delta = float(anomaly_config.delta)
+
+    x_batches: List[Tensor] = []
+    labels_type_batches: List[Tensor] = []
+    labels_channel_batches: List[Tensor] = []
+
+    for direction_index in range(int(directions.shape[0])):
+        direction_vector = directions[direction_index].to(device="cpu")
+        for label_type, shift, count in (
+            (LABEL_TYPE_HIGH, delta, num_high),
+            (LABEL_TYPE_LOW, -delta, num_low),
+        ):
+            for batch_count in _iterate_batch_counts(count, batch_size):
+                base = data_module._sample_normal_split(
+                    batch_count, data_config, generator
+                )
+                shifted = base + shift * direction_vector.unsqueeze(0)
+                x_batches.append(shifted.to(device))
+                labels_type_batches.append(
+                    torch.full(
+                        (batch_count,), label_type, dtype=torch.int64, device=device
+                    )
+                )
+                labels_channel_batches.append(
+                    torch.full(
+                        (batch_count,),
+                        direction_index,
+                        dtype=torch.int64,
+                        device=device,
+                    )
+                )
+
+    return {
+        "x_test_anomaly": torch.cat(x_batches, dim=0),
+        "labels_type": torch.cat(labels_type_batches, dim=0),
+        "labels_channel": torch.cat(labels_channel_batches, dim=0),
     }
 
 
@@ -486,6 +545,286 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
                 1, config_missing_channel_stds, generator
             )
 
+    def test_feature_direction_validation_helpers_raise_for_invalid_inputs(
+        self,
+    ) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=3,
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="fixed_random",
+            num_directions=1,
+        )
+        directions = torch.zeros((1, 3), dtype=torch.float32)
+
+        # when & then
+        anomaly_config.num_directions = 0  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            data_module._validate_feature_directions(
+                directions, data_config, anomaly_config
+            )
+
+        anomaly_config.num_directions = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            data_module._validate_feature_directions(
+                directions, data_config, anomaly_config
+            )
+
+        anomaly_config.num_directions = 1  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            data_module._validate_feature_directions(
+                torch.zeros((3,), dtype=torch.float32), data_config, anomaly_config
+            )
+        with self.assertRaises(ValueError):
+            data_module._validate_feature_directions(
+                torch.zeros((2, 3), dtype=torch.float32), data_config, anomaly_config
+            )
+        with self.assertRaises(ValueError):
+            data_module._validate_feature_directions(
+                torch.zeros((1, 4), dtype=torch.float32), data_config, anomaly_config
+            )
+
+    def test_feature_direction_helpers_raise_for_invalid_models_and_configs(
+        self,
+    ) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=3,
+            anomaly_eval_mode="stream",
+        )
+        base_anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=1,
+            direction_selection="top_purity",
+        )
+        directions = torch.zeros((1, 3), dtype=torch.float32)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=torch.nn.Identity(),
+                anomaly_config=base_anomaly_config,
+                direction_seed=1,
+            )
+
+        class DummyModel(torch.nn.Module):
+            def __init__(self, w_dec: Any, n_instances: int = 1) -> None:
+                super().__init__()
+                self.W_dec = w_dec
+                self.n_instances = n_instances
+
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=DummyModel(w_dec="not_a_tensor"),
+                anomaly_config=base_anomaly_config,
+                direction_seed=1,
+            )
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=DummyModel(w_dec=torch.zeros((3, 2), dtype=torch.float32)),
+                anomaly_config=base_anomaly_config,
+                direction_seed=1,
+            )
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=DummyModel(
+                    w_dec=torch.zeros((1, 3, 2), dtype=torch.float32), n_instances=2
+                ),
+                anomaly_config=base_anomaly_config,
+                direction_seed=1,
+            )
+
+        with self.assertRaises(ValueError):
+            _ = data_module._calculate_latent_purity(torch.zeros((1, 2, 3)))
+
+        generator = data_module._create_cpu_generator(0)
+        with self.assertRaises(ValueError):
+            _ = data_module._select_latent_indices_random(
+                num_latents=1, num_directions=2, generator=generator
+            )
+
+        wrong_shift_mode_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0, shift_mode="single_channel"
+        )
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=DummyModel(w_dec=torch.zeros((1, 3, 2), dtype=torch.float32)),
+                anomaly_config=wrong_shift_mode_config,
+                direction_seed=1,
+            )
+
+        mutated_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=1,
+            direction_selection="top_purity",
+        )
+        mutated_config.num_directions = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=DummyModel(w_dec=torch.zeros((1, 3, 2), dtype=torch.float32)),
+                anomaly_config=mutated_config,
+                direction_seed=1,
+            )
+
+        mutated_config.num_directions = 1  # type: ignore[assignment]
+        mutated_config.direction_selection = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=DummyModel(w_dec=torch.zeros((1, 3, 2), dtype=torch.float32)),
+                anomaly_config=mutated_config,
+                direction_seed=1,
+            )
+
+        explicit_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=1,
+            direction_selection="explicit",
+            direction_latent_indices=[0],
+        )
+        model = DummyModel(w_dec=torch.eye(3, 2, dtype=torch.float32).unsqueeze(0))
+        directions_explicit, metadata_explicit = build_feature_directions_from_decoder(
+            model=model,
+            anomaly_config=explicit_config,
+            direction_seed=1,
+        )
+        self.assertEqual(metadata_explicit["direction_latent_indices"], [0])
+        self.assertTrue(
+            torch.allclose(
+                directions_explicit,
+                torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
+            )
+        )
+
+        explicit_config.direction_latent_indices = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=model,
+                anomaly_config=explicit_config,
+                direction_seed=1,
+            )
+
+        explicit_config.direction_selection = "unsupported"  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=model,
+                anomaly_config=explicit_config,
+                direction_seed=1,
+            )
+
+        out_of_range_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=1,
+            direction_selection="explicit",
+            direction_latent_indices=[0],
+        )
+        out_of_range_config.direction_latent_indices = [10]  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = build_feature_directions_from_decoder(
+                model=model,
+                anomaly_config=out_of_range_config,
+                direction_seed=1,
+            )
+
+        with self.assertRaises(ValueError):
+            _ = data_module.build_fixed_random_directions(
+                data_config=data_config,
+                anomaly_config=wrong_shift_mode_config,
+                direction_seed=0,
+            )
+
+        invalid_fixed_random_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="fixed_random",
+            num_directions=1,
+        )
+        invalid_fixed_random_config.num_directions = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = data_module.build_fixed_random_directions(
+                data_config=data_config,
+                anomaly_config=invalid_fixed_random_config,
+                direction_seed=0,
+            )
+
+        with self.assertRaises(ValueError):
+            _ = data_module._build_feature_direction_anomaly_manifest(
+                data_config=data_config,
+                anomaly_config=wrong_shift_mode_config,
+                direction_metadata={},
+                direction_seed=0,
+                sample_seed=0,
+            )
+
+        invalid_manifest_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="fixed_random",
+            num_directions=1,
+        )
+        invalid_manifest_config.num_directions = None  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = data_module._build_feature_direction_anomaly_manifest(
+                data_config=data_config,
+                anomaly_config=invalid_manifest_config,
+                direction_metadata={},
+                direction_seed=0,
+                sample_seed=0,
+            )
+
+        missing_directions_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=1,
+        )
+        with self.assertRaises(ValueError):
+            _ = generate_anomaly_test_data(
+                data_config=data_config,
+                anomaly_config=missing_directions_config,
+                device=self.device,
+                batch_size=2,
+            )
+
+        invalid_stream = data_module.DirectionalDeviationFeatureDirectionAnomalyStream(
+            data_config=data_config,
+            anomaly_config=wrong_shift_mode_config,
+            device=self.device,
+            batch_size=1,
+            directions=directions,
+            sample_seed=0,
+        )
+        with self.assertRaises(ValueError):
+            _ = list(iter(invalid_stream))
+
+        with self.assertRaises(ValueError):
+            _ = data_module._collect_anomaly_preview(
+                {"anomaly_stream": object()}, anomaly_preview_count=1
+            )
+
     def test_generate_anomaly_test_data_single_channel_materialize_matches_expected(
         self,
     ) -> None:
@@ -726,6 +1065,175 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             stream_data["anomaly_manifest"], materialize_data["anomaly_manifest"]
         )
 
+    def test_build_feature_directions_from_decoder_is_deterministic_and_selects_top_purity(
+        self,
+    ) -> None:
+        # given
+        class DummyModel(torch.nn.Module):
+            def __init__(self, decoder: Tensor) -> None:
+                super().__init__()
+                self.W_dec = decoder
+                self.n_instances = 1
+
+        decoder = torch.zeros((1, 3, 4), dtype=torch.float32)
+        decoder[0, :, 0] = torch.tensor([1.0, 0.0, 0.0])
+        decoder[0, :, 1] = torch.tensor([1.0, 1.0, 0.0])
+        decoder[0, :, 2] = torch.tensor([0.5, 0.5, 0.5])
+        decoder[0, :, 3] = torch.tensor([0.0, 0.0, 1.0])
+        model = DummyModel(decoder)
+
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=2,
+            direction_selection="top_purity",
+            normalize_directions=True,
+        )
+
+        # when
+        directions_a, metadata_a = build_feature_directions_from_decoder(
+            model=model,
+            anomaly_config=anomaly_config,
+            direction_seed=123,
+        )
+        directions_b, metadata_b = build_feature_directions_from_decoder(
+            model=model,
+            anomaly_config=anomaly_config,
+            direction_seed=123,
+        )
+
+        # then
+        self.assertTrue(torch.equal(directions_a, directions_b))
+        self.assertEqual(metadata_a["direction_latent_indices"], [0, 3])
+        self.assertEqual(
+            metadata_a["direction_latent_indices"],
+            metadata_b["direction_latent_indices"],
+        )
+
+    def test_build_feature_directions_from_decoder_random_selection_is_deterministic(
+        self,
+    ) -> None:
+        # given
+        class DummyModel(torch.nn.Module):
+            def __init__(self, decoder: Tensor) -> None:
+                super().__init__()
+                self.W_dec = decoder
+                self.n_instances = 1
+
+        decoder = torch.arange(1, 1 + 1 * 3 * 6, dtype=torch.float32).reshape(1, 3, 6)
+        model = DummyModel(decoder)
+
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=1.0,
+            shift_mode="feature_direction",
+            direction_source="reference_model_decoder",
+            num_directions=3,
+            direction_selection="random",
+            normalize_directions=False,
+        )
+
+        # when
+        directions_a, metadata_a = build_feature_directions_from_decoder(
+            model=model,
+            anomaly_config=anomaly_config,
+            direction_seed=999,
+        )
+        directions_b, metadata_b = build_feature_directions_from_decoder(
+            model=model,
+            anomaly_config=anomaly_config,
+            direction_seed=999,
+        )
+
+        # then
+        self.assertTrue(torch.equal(directions_a, directions_b))
+        self.assertEqual(
+            metadata_a["direction_latent_indices"],
+            metadata_b["direction_latent_indices"],
+        )
+
+    def test_generate_anomaly_test_data_feature_direction_materialize_matches_expected(
+        self,
+    ) -> None:
+        # given
+        batch_size = 2
+        data_config = DirectionalDeviationDataConfig(
+            seed=5,
+            num_train=3,
+            num_val=3,
+            num_test_normal=3,
+            num_test_high_per_channel=2,
+            num_test_low_per_channel=1,
+            num_channels=4,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="materialize",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=2.0,
+            shift_mode="feature_direction",
+            direction_source="fixed_random",
+            num_directions=2,
+            num_test_high_per_direction=3,
+            num_test_low_per_direction=2,
+            normalize_directions=True,
+        )
+        directions = torch.tensor(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.6, 0.8, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+
+        # when
+        anomaly_data = generate_anomaly_test_data(
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+            device=self.device,
+            batch_size=batch_size,
+            anomaly_directions=directions,
+            direction_metadata={
+                "direction_selection": "explicit",
+                "direction_latent_indices": [0, 1],
+            },
+        )
+
+        # then
+        num_high = int(anomaly_config.num_test_high_per_direction)
+        num_low = int(anomaly_config.num_test_low_per_direction)
+        expected_count = int(anomaly_config.num_directions) * (num_high + num_low)
+        self.assertEqual(anomaly_data["x_test_anomaly"].shape, (expected_count, 4))
+        self.assertEqual(anomaly_data["labels_type"].shape, (expected_count,))
+        self.assertEqual(anomaly_data["labels_channel"].shape, (expected_count,))
+
+        manifest = anomaly_data["anomaly_manifest"]
+        self.assertEqual(manifest["shift_mode"], "feature_direction")
+        self.assertEqual(
+            manifest["counts"]["high"], int(anomaly_config.num_directions) * num_high
+        )
+        self.assertEqual(
+            manifest["counts"]["low"], int(anomaly_config.num_directions) * num_low
+        )
+
+        expected = _build_expected_feature_direction_anomalies(
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+            directions=directions,
+            sample_seed=int(manifest["seed_plan"]["sample_seed"]),
+            batch_size=batch_size,
+            device=self.device,
+        )
+        self.assertTrue(
+            torch.equal(anomaly_data["x_test_anomaly"], expected["x_test_anomaly"])
+        )
+        self.assertTrue(
+            torch.equal(anomaly_data["labels_type"], expected["labels_type"])
+        )
+        self.assertTrue(
+            torch.equal(anomaly_data["labels_channel"], expected["labels_channel"])
+        )
+
     def test_export_data_summary_writes_expected_files_for_stream_anomalies(
         self,
     ) -> None:
@@ -789,6 +1297,56 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             self.assertEqual(sampled["x_test_anomaly"].shape, (5, 5))
             self.assertEqual(sampled["labels_type"].shape, (5,))
             self.assertEqual(sampled["labels_channel"].shape, (5,))
+
+    def test_export_data_summary_writes_anomaly_directions_for_feature_direction(
+        self,
+    ) -> None:
+        # given
+        data_config = DirectionalDeviationDataConfig(
+            seed=0,
+            num_train=10,
+            num_val=11,
+            num_test_normal=12,
+            num_test_high_per_channel=2,
+            num_test_low_per_channel=3,
+            num_channels=5,
+            noise_std=0.0,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=4.0,
+            shift_mode="feature_direction",
+            direction_source="fixed_random",
+            num_directions=3,
+            normalize_directions=True,
+        )
+        normal_data = generate_normal_data(data_config, self.device)
+        anomaly_data = generate_anomaly_test_data(
+            data_config=data_config,
+            anomaly_config=anomaly_config,
+            device=self.device,
+            batch_size=4,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # when
+            export_data_summary(
+                tmpdir,
+                data_config,
+                anomaly_config,
+                normal_data,
+                anomaly_data,
+                sample_preview_count=4,
+                anomaly_preview_count=5,
+            )
+
+            # then
+            data_dir = os.path.join(tmpdir, "data")
+            directions_path = os.path.join(data_dir, "anomaly_directions.pt")
+            self.assertTrue(os.path.isfile(directions_path))
+            directions = torch.load(directions_path)
+            self.assertEqual(tuple(directions.shape), (3, 5))
 
     def test_export_data_summary_records_non_gaussian_derived_parameters(
         self,

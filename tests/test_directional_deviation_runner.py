@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 from dataclasses import replace
-from typing import Any, Dict
+from typing import Any, Dict, List
 from unittest.mock import patch
 
 import torch
@@ -777,6 +777,357 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             self.assertEqual(
                 called_inputs.coverage_recall_target, config.coverage_recall_target
             )
+
+    def test_run_leaf_experiment_feature_direction_trains_reference_model_before_building_anomalies(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_config = DirectionalDeviationDataConfig(
+                seed=1,
+                num_train=2,
+                num_val=2,
+                num_test_normal=1,
+                num_test_high_per_channel=1,
+                num_test_low_per_channel=1,
+                num_channels=4,
+            )
+            anomaly_config = DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="reference_model_decoder",
+                num_directions=2,
+                reference_model_name="sign_aware_gated_sae",
+                direction_selection="top_purity",
+            )
+            threshold_config = DirectionalDeviationThresholdConfig(
+                latent_quantile=0.99,
+                score_fpr=0.01,
+                min_validation_samples=1,
+                deterministic_algorithms=False,
+            )
+            relu_config = DirectionalDeviationModelVariantConfig(
+                name="relu_sae",
+                sae_class="SAE",
+                sign_aware=False,
+                single_activation_offset=False,
+                reset_activation_offsets_on_resample=False,
+                d_hidden=2,
+                sparsity_coeff=0.0,
+                learning_rate=0.01,
+                num_epochs=1,
+                batch_size=2,
+                adam_betas=(0.9, 0.999),
+            )
+            reference_config = DirectionalDeviationModelVariantConfig(
+                name="sign_aware_gated_sae",
+                sae_class="GatedSAE",
+                sign_aware=True,
+                single_activation_offset=False,
+                reset_activation_offsets_on_resample=False,
+                d_hidden=3,
+                sparsity_coeff=0.0,
+                learning_rate=0.01,
+                num_epochs=1,
+                batch_size=2,
+                adam_betas=(0.9, 0.999),
+            )
+            config = DirectionalDeviationExperimentConfig(
+                output_dir=tmpdir,
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=threshold_config,
+                models=[relu_config, reference_config],
+                run_id="root",
+            )
+            normal_data = {
+                "x_train": torch.zeros((2, 4), dtype=torch.float32),
+                "x_val": torch.zeros((2, 4), dtype=torch.float32),
+                "x_test_normal": torch.zeros((1, 4), dtype=torch.float32),
+            }
+            anomaly_directions = torch.eye(4, dtype=torch.float32)[:2]
+            direction_metadata: Dict[str, Any] = {
+                "direction_selection": "top_purity",
+                "direction_latent_indices": [0, 1],
+            }
+            anomaly_data = {
+                "anomaly_manifest": {
+                    "shift_mode": "feature_direction",
+                    "num_channels": 4,
+                    "num_directions": 2,
+                    "direction_indices_to_evaluate": [0, 1],
+                }
+            }
+            reference_training_output = {
+                "model": torch.nn.Identity(),
+                "training_metrics": {"loss_total": []},
+            }
+
+            single_model_calls: List[Dict[str, Any]] = []
+
+            def run_single_model_side_effect(**kwargs: Any) -> Dict[str, Any]:
+                single_model_calls.append(kwargs)
+                return {
+                    "model_name": kwargs["model_config"].name,
+                    "metrics": {"recall_high": 0.0, "recall_low": 0.0},
+                    "per_channel": None,
+                    "per_direction": None,
+                    "error": None,
+                }
+
+            # when
+            with patch.object(
+                runner_module, "generate_normal_data", return_value=normal_data
+            ), patch.object(
+                runner_module,
+                "run_training_for_variant",
+                return_value=reference_training_output,
+            ) as train_mock, patch.object(
+                runner_module,
+                "build_feature_directions_from_decoder",
+                return_value=(anomaly_directions, direction_metadata),
+            ) as directions_mock, patch.object(
+                runner_module,
+                "generate_anomaly_test_data",
+                return_value=anomaly_data,
+            ) as anomaly_mock, patch.object(
+                runner_module,
+                "export_data_summary",
+            ), patch.object(
+                runner_module,
+                "_run_single_model",
+                side_effect=run_single_model_side_effect,
+            ) as single_model_mock, patch.object(
+                runner_module,
+                "persist_comparison_summary",
+            ), patch.object(
+                runner_module,
+                "generate_plots_for_run",
+            ):
+                _ = runner_module._run_leaf_experiment(
+                    config=config, run_dir=tmpdir, batch_size=8
+                )
+
+            # then
+            train_mock.assert_called_once()
+            train_kwargs = train_mock.call_args.kwargs
+            self.assertEqual(train_kwargs["model_config"].name, "sign_aware_gated_sae")
+
+            directions_mock.assert_called_once()
+            anomaly_mock.assert_called_once()
+            anomaly_kwargs = anomaly_mock.call_args.kwargs
+            self.assertTrue(
+                torch.equal(anomaly_kwargs["anomaly_directions"], anomaly_directions)
+            )
+            self.assertEqual(anomaly_kwargs["direction_metadata"], direction_metadata)
+
+            self.assertEqual(single_model_mock.call_count, 2)
+            by_name = {call["model_config"].name: call for call in single_model_calls}
+            self.assertIn("relu_sae", by_name)
+            self.assertIn("sign_aware_gated_sae", by_name)
+            self.assertIsNone(by_name["relu_sae"].get("training_output"))
+            self.assertIs(
+                by_name["sign_aware_gated_sae"].get("training_output"),
+                reference_training_output,
+            )
+
+    def test_run_leaf_experiment_raises_for_per_model_decoder_direction_source(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            feature_anomaly = DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="per_model_decoder",
+                num_directions=1,
+            )
+            feature_config = replace(config, anomaly=feature_anomaly)
+
+            # when & then
+            with patch.object(
+                runner_module, "generate_normal_data", return_value={}
+            ), self.assertRaises(ValueError):
+                _ = runner_module._run_leaf_experiment(
+                    config=feature_config, run_dir=tmpdir, batch_size=8
+                )
+
+    def test_run_leaf_experiment_raises_when_reference_model_name_missing_after_mutation(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_config = DirectionalDeviationDataConfig(
+                seed=1,
+                num_train=2,
+                num_val=2,
+                num_test_normal=1,
+                num_test_high_per_channel=1,
+                num_test_low_per_channel=1,
+                num_channels=4,
+            )
+            anomaly_config = DirectionalDeviationAnomalyConfig(
+                delta=1.0,
+                shift_mode="feature_direction",
+                direction_source="reference_model_decoder",
+                num_directions=1,
+                reference_model_name="sign_aware_gated_sae",
+            )
+            threshold_config = DirectionalDeviationThresholdConfig(
+                latent_quantile=0.99,
+                score_fpr=0.01,
+                min_validation_samples=1,
+                deterministic_algorithms=False,
+            )
+            model_config = DirectionalDeviationModelVariantConfig(
+                name="sign_aware_gated_sae",
+                sae_class="SAE",
+                sign_aware=False,
+                single_activation_offset=False,
+                reset_activation_offsets_on_resample=False,
+                d_hidden=2,
+                sparsity_coeff=0.0,
+                learning_rate=0.01,
+                num_epochs=1,
+                batch_size=2,
+                adam_betas=(0.9, 0.999),
+            )
+            config = DirectionalDeviationExperimentConfig(
+                output_dir=tmpdir,
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=threshold_config,
+                models=[model_config],
+                run_id="root",
+            )
+            config.anomaly.reference_model_name = "missing"  # type: ignore[assignment]
+
+            # when & then
+            with patch.object(
+                runner_module, "generate_normal_data", return_value={}
+            ), self.assertRaises(ValueError):
+                _ = runner_module._run_leaf_experiment(
+                    config=config, run_dir=tmpdir, batch_size=8
+                )
+
+    def test_run_leaf_experiment_catches_plot_generation_failure_when_verbose(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            normal_data, anomaly_data = self._build_minimal_run_state(
+                num_channels=config.data.num_channels
+            )
+            evaluation = {"metrics": {"recall_high": 0.0, "recall_low": 0.0}}
+
+            # when
+            with patch.object(
+                runner_module, "generate_normal_data", return_value=normal_data
+            ), patch.object(
+                runner_module,
+                "generate_anomaly_test_data",
+                return_value=anomaly_data,
+            ), patch.object(
+                runner_module, "export_data_summary"
+            ), patch.object(
+                runner_module, "_run_single_model", return_value=evaluation
+            ), patch.object(
+                runner_module, "persist_comparison_summary"
+            ), patch.object(
+                runner_module,
+                "generate_plots_for_run",
+                side_effect=RuntimeError("plot_fail"),
+            ), patch(
+                "builtins.print"
+            ) as print_mock:
+                _ = runner_module._run_leaf_experiment(
+                    config=config, run_dir=tmpdir, batch_size=8
+                )
+
+            # then
+            self.assertTrue(
+                any("plot_fail" in str(call) for call in print_mock.call_args_list)
+            )
+
+    def test_run_seed_sweep_catches_plot_generation_failure_when_verbose(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            sweep_config = replace(config, data=replace(config.data, seeds=[0]))
+            run_dir = os.path.join(tmpdir, "directional_deviation", "root")
+            os.makedirs(run_dir, exist_ok=True)
+
+            # when
+            with patch.object(
+                runner_module, "_run_leaf_experiment", return_value={"models": {}}
+            ), patch.object(
+                runner_module,
+                "generate_plots_for_run",
+                side_effect=RuntimeError("plot_fail"),
+            ), patch(
+                "builtins.print"
+            ) as print_mock:
+                _ = runner_module._run_seed_sweep(
+                    config=sweep_config, run_dir=run_dir, batch_size=8
+                )
+
+            # then
+            self.assertTrue(
+                any("plot_fail" in str(call) for call in print_mock.call_args_list)
+            )
+
+    def test_run_width_sweep_catches_plot_generation_failure_when_verbose(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            sweep_config = replace(config, width_sweep=[1])
+            run_dir = os.path.join(tmpdir, "directional_deviation", "root")
+            os.makedirs(run_dir, exist_ok=True)
+
+            # when
+            with patch.object(
+                runner_module,
+                "_run_experiment_dispatch",
+                return_value={"models": {"relu_sae": {"recall_high": 0.0}}},
+            ), patch.object(runner_module, "_persist_per_width_metrics"), patch.object(
+                runner_module,
+                "generate_plots_for_run",
+                side_effect=RuntimeError("plot_fail"),
+            ), patch(
+                "builtins.print"
+            ) as print_mock:
+                _ = runner_module._run_width_sweep(
+                    config=sweep_config, run_dir=run_dir, batch_size=8
+                )
+
+            # then
+            self.assertTrue(
+                any("plot_fail" in str(call) for call in print_mock.call_args_list)
+            )
+
+    def test_extract_models_metrics_for_metrics_json_returns_empty_when_no_models(
+        self,
+    ) -> None:
+        # given
+        summary = {"no_models": True}
+
+        # when
+        models = runner_module._extract_models_metrics_for_metrics_json(summary)
+
+        # then
+        self.assertEqual(models, {})
 
 
 if __name__ == "__main__":  # pragma: no cover

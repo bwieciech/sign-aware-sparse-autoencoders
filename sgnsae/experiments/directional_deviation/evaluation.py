@@ -185,13 +185,29 @@ def evaluate_directional_deviation(
     total_low_by_channel: Optional[Tensor] = None
     detected_low_by_channel: Optional[Tensor] = None
 
-    per_channel_enabled = anomaly_manifest.get("shift_mode") == "single_channel"
+    shift_mode = anomaly_manifest.get("shift_mode")
+    per_channel_enabled = shift_mode == "single_channel"
+    per_direction_enabled = shift_mode == "feature_direction"
     num_channels = int(anomaly_manifest.get("num_channels", x_test_normal.shape[1]))
     if per_channel_enabled:
         total_high_by_channel = torch.zeros(num_channels, dtype=torch.int64)
         detected_high_by_channel = torch.zeros(num_channels, dtype=torch.int64)
         total_low_by_channel = torch.zeros(num_channels, dtype=torch.int64)
         detected_low_by_channel = torch.zeros(num_channels, dtype=torch.int64)
+    total_high_by_direction: Optional[Tensor] = None
+    detected_high_by_direction: Optional[Tensor] = None
+    total_low_by_direction: Optional[Tensor] = None
+    detected_low_by_direction: Optional[Tensor] = None
+    num_directions = int(anomaly_manifest.get("num_directions", 0))
+    if per_direction_enabled:
+        if num_directions <= 0:
+            raise ValueError(
+                "anomaly_manifest must include a positive num_directions when shift_mode='feature_direction'."
+            )
+        total_high_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+        detected_high_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+        total_low_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+        detected_low_by_direction = torch.zeros(num_directions, dtype=torch.int64)
 
     model.eval()
     with torch.no_grad():
@@ -246,6 +262,40 @@ def evaluate_directional_deviation(
                     )
                     detected_low_by_channel += torch.bincount(
                         channels_low_detected, minlength=num_channels
+                    )
+
+            if per_direction_enabled:
+                assert total_high_by_direction is not None
+                assert detected_high_by_direction is not None
+                assert total_low_by_direction is not None
+                assert detected_low_by_direction is not None
+                if torch.any(batch.labels_channel < 0):
+                    raise ValueError(
+                        "Per-direction evaluation requires non-negative labels_channel entries."
+                    )
+
+                if torch.any(high_mask):
+                    directions_high = batch.labels_channel[high_mask].to("cpu")
+                    directions_high_detected = batch.labels_channel[
+                        predicted_high & high_mask
+                    ].to("cpu")
+                    total_high_by_direction += torch.bincount(
+                        directions_high, minlength=num_directions
+                    )
+                    detected_high_by_direction += torch.bincount(
+                        directions_high_detected, minlength=num_directions
+                    )
+
+                if torch.any(low_mask):
+                    directions_low = batch.labels_channel[low_mask].to("cpu")
+                    directions_low_detected = batch.labels_channel[
+                        predicted_low & low_mask
+                    ].to("cpu")
+                    total_low_by_direction += torch.bincount(
+                        directions_low, minlength=num_directions
+                    )
+                    detected_low_by_direction += torch.bincount(
+                        directions_low_detected, minlength=num_directions
                     )
 
     recall_high = None if total_high == 0 else float(detected_high) / total_high
@@ -324,10 +374,85 @@ def evaluate_directional_deviation(
             "covered_channels_fraction": covered_fraction,
         }
 
+    per_direction: Optional[Dict[str, Any]] = None
+    if per_direction_enabled:
+        direction_indices_raw = anomaly_manifest.get("direction_indices_to_evaluate")
+        direction_indices = (
+            list(range(num_directions))
+            if direction_indices_raw is None
+            else [int(value) for value in direction_indices_raw]
+        )
+        if not direction_indices:
+            raise ValueError("direction_indices_to_evaluate must be non-empty.")
+
+        assert total_high_by_direction is not None
+        assert detected_high_by_direction is not None
+        assert total_low_by_direction is not None
+        assert detected_low_by_direction is not None
+
+        per_direction_recall_high: List[Optional[float]] = []
+        per_direction_recall_low: List[Optional[float]] = []
+        per_direction_num_high: List[int] = []
+        per_direction_num_low: List[int] = []
+        covered_directions = 0
+
+        for direction_index in direction_indices:
+            num_high = int(total_high_by_direction[direction_index].item())
+            num_low = int(total_low_by_direction[direction_index].item())
+            per_direction_num_high.append(num_high)
+            per_direction_num_low.append(num_low)
+
+            recall_high_direction = (
+                None
+                if num_high == 0
+                else float(detected_high_by_direction[direction_index].item())
+                / num_high
+            )
+            recall_low_direction = (
+                None
+                if num_low == 0
+                else float(detected_low_by_direction[direction_index].item()) / num_low
+            )
+            per_direction_recall_high.append(recall_high_direction)
+            per_direction_recall_low.append(recall_low_direction)
+
+            if (
+                recall_high_direction is not None
+                and recall_low_direction is not None
+                and recall_high_direction >= coverage_recall_target
+                and recall_low_direction >= coverage_recall_target
+            ):
+                covered_directions += 1
+
+        covered_fraction = float(covered_directions) / len(direction_indices)
+        per_direction = {
+            "directions": direction_indices,
+            "recall_high": per_direction_recall_high,
+            "recall_low": per_direction_recall_low,
+            "num_high": per_direction_num_high,
+            "num_low": per_direction_num_low,
+            "coverage_recall_target": coverage_recall_target,
+            "covered_directions_count": covered_directions,
+            "covered_directions_fraction": covered_fraction,
+        }
+
+    target_kind = (
+        "channel"
+        if per_channel_enabled
+        else "direction" if per_direction_enabled else None
+    )
+    num_targets: Optional[int] = None
+    if per_channel is not None:
+        num_targets = len(per_channel.get("channels", []))
+    if per_direction is not None:
+        num_targets = len(per_direction.get("directions", []))
+
     return {
         "model_name": model_name,
         "model_type": type(model).__name__,
         "scoring_mode": scoring_mode,
+        "target_kind": target_kind,
+        "num_targets": num_targets,
         "metrics": {
             "recall_high": recall_high,
             "recall_low": recall_low,
@@ -342,6 +467,7 @@ def evaluate_directional_deviation(
             "score_quantile": score_thresholds.score_quantile,
         },
         "per_channel": per_channel,
+        "per_direction": per_direction,
         "error": None,
     }
 
@@ -370,6 +496,8 @@ def evaluate_and_persist_directional_deviation(
             "model_name": inputs.model_name,
             "model_type": type(inputs.model).__name__,
             "scoring_mode": inputs.scoring_mode,
+            "target_kind": None,
+            "num_targets": None,
             "metrics": {
                 "recall_high": None,
                 "recall_low": None,
@@ -384,6 +512,7 @@ def evaluate_and_persist_directional_deviation(
                 "score_quantile": inputs.score_thresholds.score_quantile,
             },
             "per_channel": None,
+            "per_direction": None,
             "error": f"{type(exc).__name__}: {exc}",
         }
     with open(evaluation_path, "w") as f:
@@ -395,11 +524,27 @@ def build_comparison_summary(
     evaluations_by_model_name: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
     models: Dict[str, Any] = {}
+    target_kind: Optional[str] = None
+    num_targets: Optional[int] = None
     for model_name, evaluation in evaluations_by_model_name.items():
         metrics = evaluation.get("metrics") if isinstance(evaluation, dict) else None
         per_channel = (
             evaluation.get("per_channel") if isinstance(evaluation, dict) else None
         )
+        per_direction = (
+            evaluation.get("per_direction") if isinstance(evaluation, dict) else None
+        )
+        if target_kind is None and isinstance(evaluation, dict):
+            target_kind_value = evaluation.get("target_kind")
+            target_kind = (
+                str(target_kind_value) if target_kind_value is not None else None
+            )
+        if num_targets is None and isinstance(evaluation, dict):
+            num_targets_value = evaluation.get("num_targets")
+            num_targets = (
+                int(num_targets_value) if num_targets_value is not None else None
+            )
+
         per_channel_fraction = (
             None
             if not isinstance(per_channel, dict)
@@ -409,6 +554,16 @@ def build_comparison_summary(
             None
             if not isinstance(per_channel, dict)
             else per_channel.get("covered_channels_count")
+        )
+        per_direction_fraction = (
+            None
+            if not isinstance(per_direction, dict)
+            else per_direction.get("covered_directions_fraction")
+        )
+        per_direction_count = (
+            None
+            if not isinstance(per_direction, dict)
+            else per_direction.get("covered_directions_count")
         )
         models[model_name] = {
             "recall_high": (
@@ -423,12 +578,25 @@ def build_comparison_summary(
             "fpr_low": (
                 None if not isinstance(metrics, dict) else metrics.get("fpr_low")
             ),
+            "target_kind": (
+                evaluation.get("target_kind") if isinstance(evaluation, dict) else None
+            ),
+            "num_targets": (
+                evaluation.get("num_targets") if isinstance(evaluation, dict) else None
+            ),
             "covered_channels_fraction": per_channel_fraction,
             "covered_channels_count": per_channel_count,
+            "covered_directions_fraction": per_direction_fraction,
+            "covered_directions_count": per_direction_count,
             "error": evaluation.get("error") if isinstance(evaluation, dict) else None,
         }
 
-    return {"models": models}
+    targets_summary = (
+        None
+        if target_kind is None
+        else {"kind": target_kind, "num_targets": num_targets}
+    )
+    return {"targets": targets_summary, "models": models}
 
 
 def persist_comparison_summary(

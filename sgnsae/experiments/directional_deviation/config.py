@@ -179,16 +179,27 @@ class DirectionalDeviationDataConfig:
 @dataclass
 class DirectionalDeviationAnomalyConfig:
     delta: float
-    shift_mode: Literal["single_channel", "subset"]
+    shift_mode: Literal["single_channel", "subset", "feature_direction"]
     subset_size: Optional[int] = None
     channels_to_evaluate: Optional[List[int]] = None
+    direction_source: Optional[
+        Literal["reference_model_decoder", "fixed_random", "per_model_decoder"]
+    ] = None
+    num_directions: Optional[int] = None
+    reference_model_name: str = "sign_aware_gated_sae"
+    direction_selection: Optional[Literal["top_purity", "random", "explicit"]] = None
+    direction_latent_indices: Optional[List[int]] = None
+    normalize_directions: bool = True
+    num_test_high_per_direction: Optional[int] = None
+    num_test_low_per_direction: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.delta <= 0:
             raise ValueError(f"delta must be positive; received {self.delta}.")
-        if self.shift_mode not in {"single_channel", "subset"}:
+        if self.shift_mode not in {"single_channel", "subset", "feature_direction"}:
             raise ValueError(
-                f"shift_mode must be one of 'single_channel' or 'subset'; received {self.shift_mode}."
+                "shift_mode must be one of 'single_channel', 'subset', or "
+                f"'feature_direction'; received {self.shift_mode}."
             )
         if self.shift_mode == "subset":
             if self.subset_size is None:
@@ -198,12 +209,101 @@ class DirectionalDeviationAnomalyConfig:
             _validate_positive_int(self.subset_size, "subset_size")
         elif self.subset_size is not None:
             raise ValueError(
-                "subset_size must be omitted when shift_mode='single_channel'."
+                f"subset_size must be omitted when shift_mode='{self.shift_mode}'."
             )
 
         if self.channels_to_evaluate is not None and not self.channels_to_evaluate:
             raise ValueError(
                 "channels_to_evaluate must be a non-empty list when provided."
+            )
+
+        if self.shift_mode != "feature_direction":
+            if (
+                self.direction_source is not None
+                or self.num_directions is not None
+                or self.direction_selection is not None
+                or self.direction_latent_indices is not None
+                or self.num_test_high_per_direction is not None
+                or self.num_test_low_per_direction is not None
+            ):
+                raise ValueError(
+                    "Feature-direction fields may only be provided when shift_mode='feature_direction'."
+                )
+            return
+
+        if self.channels_to_evaluate is not None:
+            raise ValueError(
+                "channels_to_evaluate must be omitted when shift_mode='feature_direction'."
+            )
+
+        if self.direction_source is None:
+            self.direction_source = "reference_model_decoder"
+        if self.direction_source not in {
+            "reference_model_decoder",
+            "fixed_random",
+            "per_model_decoder",
+        }:
+            raise ValueError(
+                "direction_source must be one of 'reference_model_decoder', 'fixed_random', or "
+                f"'per_model_decoder'; received {self.direction_source}."
+            )
+
+        if self.num_directions is None:
+            raise ValueError(
+                "num_directions must be provided when shift_mode='feature_direction'."
+            )
+        _validate_positive_int(self.num_directions, "num_directions")
+
+        if self.direction_selection is None:
+            self.direction_selection = "top_purity"
+        if self.direction_selection not in {"top_purity", "random", "explicit"}:
+            raise ValueError(
+                "direction_selection must be one of 'top_purity', 'random', or 'explicit'; "
+                f"received {self.direction_selection}."
+            )
+
+        if self.direction_selection == "explicit":
+            if self.direction_latent_indices is None:
+                raise ValueError(
+                    "direction_latent_indices must be provided when direction_selection='explicit'."
+                )
+            if len(self.direction_latent_indices) != self.num_directions:
+                raise ValueError(
+                    "direction_latent_indices must have length num_directions="
+                    f"{self.num_directions}; received {len(self.direction_latent_indices)}."
+                )
+            if len(set(self.direction_latent_indices)) != len(
+                self.direction_latent_indices
+            ):
+                raise ValueError(
+                    "direction_latent_indices must not contain duplicates."
+                )
+            for latent_index in self.direction_latent_indices:
+                if latent_index < 0:
+                    raise ValueError(
+                        "direction_latent_indices entries must be non-negative; "
+                        f"received {latent_index}."
+                    )
+        elif self.direction_latent_indices is not None:
+            raise ValueError(
+                "direction_latent_indices must be omitted unless direction_selection='explicit'."
+            )
+
+        if (
+            self.direction_source == "reference_model_decoder"
+            and not self.reference_model_name
+        ):
+            raise ValueError(
+                "reference_model_name must be a non-empty string when direction_source='reference_model_decoder'."
+            )
+
+        if self.num_test_high_per_direction is not None:
+            _validate_positive_int(
+                self.num_test_high_per_direction, "num_test_high_per_direction"
+            )
+        if self.num_test_low_per_direction is not None:
+            _validate_positive_int(
+                self.num_test_low_per_direction, "num_test_low_per_direction"
             )
 
 
@@ -308,6 +408,14 @@ class DirectionalDeviationExperimentConfig:
                 f"received num_val={self.data.num_val} and min_validation_samples={self.thresholds.min_validation_samples}."
             )
 
+        if (
+            self.data.train_anomaly_fraction > 0.0
+            and self.anomaly.shift_mode == "feature_direction"
+        ):
+            raise ValueError(
+                "train_anomaly_fraction must be 0.0 when shift_mode='feature_direction'."
+            )
+
         if self.anomaly.shift_mode == "subset":
             if self.anomaly.subset_size is None:
                 raise ValueError(
@@ -329,6 +437,18 @@ class DirectionalDeviationExperimentConfig:
             ):
                 raise ValueError("channels_to_evaluate must not contain duplicates.")
 
+        if (
+            self.anomaly.shift_mode == "feature_direction"
+            and self.anomaly.direction_source == "reference_model_decoder"
+        ):
+            reference_model_name = self.anomaly.reference_model_name
+            if not any(model.name == reference_model_name for model in self.models):
+                raise ValueError(
+                    "reference_model_name must match a model name in config.models when "
+                    "direction_source='reference_model_decoder'; received "
+                    f"reference_model_name='{reference_model_name}'."
+                )
+
         widths_to_validate = self.width_sweep if self.width_sweep is not None else None
         if widths_to_validate is not None:
             if not widths_to_validate:
@@ -346,6 +466,66 @@ class DirectionalDeviationExperimentConfig:
                         "Protocol B requires d_hidden < num_channels; received "
                         f"d_hidden={model_config.d_hidden} and num_channels={self.data.num_channels}."
                     )
+
+        if (
+            self.anomaly.shift_mode == "feature_direction"
+            and self.anomaly.num_directions is not None
+        ):
+            num_directions = int(self.anomaly.num_directions)
+            if self.anomaly.direction_source == "reference_model_decoder":
+                if widths_to_validate is not None:
+                    if any(int(width) < num_directions for width in widths_to_validate):
+                        raise ValueError(
+                            "All width_sweep entries must satisfy d_hidden >= num_directions when "
+                            "direction_source='reference_model_decoder'; received "
+                            f"num_directions={num_directions} and width_sweep={widths_to_validate}."
+                        )
+                else:
+                    reference_model_name = self.anomaly.reference_model_name
+                    reference_model_config = next(
+                        (
+                            model_config
+                            for model_config in self.models
+                            if model_config.name == reference_model_name
+                        ),
+                        None,
+                    )
+                    if reference_model_config is not None and (
+                        int(reference_model_config.d_hidden) < num_directions
+                    ):
+                        raise ValueError(
+                            "reference_model_name must refer to a model with d_hidden >= num_directions; "
+                            f"received reference_model_name='{reference_model_name}', "
+                            f"d_hidden={reference_model_config.d_hidden}, and num_directions={num_directions}."
+                        )
+                    if (
+                        reference_model_config is not None
+                        and self.anomaly.direction_latent_indices is not None
+                    ):
+                        width = int(reference_model_config.d_hidden)
+                        for latent_index in self.anomaly.direction_latent_indices:
+                            if latent_index >= width:
+                                raise ValueError(
+                                    "direction_latent_indices entries must be < reference model d_hidden; "
+                                    f"received latent_index={latent_index} and d_hidden={width}."
+                                )
+            elif self.anomaly.direction_source == "per_model_decoder":
+                if widths_to_validate is not None:
+                    if any(int(width) < num_directions for width in widths_to_validate):
+                        raise ValueError(
+                            "All width_sweep entries must satisfy d_hidden >= num_directions when "
+                            "direction_source='per_model_decoder'; received "
+                            f"num_directions={num_directions} and width_sweep={widths_to_validate}."
+                        )
+                else:
+                    for model_config in self.models:
+                        if int(model_config.d_hidden) < num_directions:
+                            raise ValueError(
+                                "All models must satisfy d_hidden >= num_directions when "
+                                "direction_source='per_model_decoder'; received model "
+                                f"name='{model_config.name}', d_hidden={model_config.d_hidden}, "
+                                f"and num_directions={num_directions}."
+                            )
 
 
 def _load_raw_config(path: str) -> Dict[str, Any]:
