@@ -123,3 +123,76 @@
   - [x] 8.6 Add a streaming-mode smoke test (if implemented)
     - Run a tiny config with `anomaly_eval_mode="stream"` and assert evaluation completes and artifacts are written.
     - _Requirements: 1.8_
+
+- [ ] 9. Add symmetry-breaking normal distributions (5A)
+  - [ ] 9.1 Extend `DirectionalDeviationDataConfig` for non-Gaussian normal modes
+    - Add `normal_mode` values: `iid_non_gaussian`, `non_gaussian_heteroskedastic`.
+    - Add `non_gaussian_dist` (`laplace`, `logistic`, `student_t`), `student_t_df`, and `ensure_unique_channel_stds`.
+    - Add config validation: `student_t_df > 2`, `channel_stds` length equals `num_channels`, all stds > 0, optionally enforce uniqueness.
+    - _Requirements: R1, R2_
+  - [ ] 9.2 Implement IID non-Gaussian normal sampling with unit variance
+    - Laplace: use `b = 1/sqrt(2)` to obtain variance 1.
+    - Logistic: use `s = sqrt(3)/pi` to obtain variance 1.
+    - Student-t: scale by `sqrt((df-2)/df)` for df>2 to obtain variance 1.
+    - Apply `noise_std` last, after any non-Gaussian and/or heteroskedastic scaling.
+    - _Requirements: R2_
+  - [ ] 9.3 Extend generator artifact export for new modes
+    - Record `normal_mode`, `non_gaussian_dist`, derived scale parameters, and `channel_stds` (when used) in `data/generator_config.json`.
+    - _Requirements: R2, R6_
+  - [ ] 9.4 Add tests for symmetry-breaking normal generation
+    - Add `unittest` coverage for determinism (same seed) and variance sanity checks for each `normal_mode`.
+    - _Requirements: R7_
+
+- [ ] 10. Add feature-direction anomaly mode (5B)
+  - [ ] 10.1 Extend `DirectionalDeviationAnomalyConfig` to support `shift_mode="feature_direction"`
+    - Add fields: `direction_source`, `num_directions`, `reference_model_name`, `direction_selection`, `direction_latent_indices`, `normalize_directions`, and per-direction anomaly counts.
+    - Validate: `num_directions > 0`, `direction_latent_indices` present when `direction_selection="explicit"`, and counts are positive.
+    - _Requirements: R1, R3_
+  - [ ] 10.2 Implement direction extraction from a reference model decoder
+    - Add a helper to compute per-latent purity `max_j |D[j,i]| / ||D[:,i]||_2`, then select directions by `top_purity`, `random`, or `explicit`.
+    - Write `data/anomaly_directions.pt` (shape `M x N`) and `data/anomaly_manifest.json` recording direction source, selection, and the chosen latent indices.
+    - _Requirements: R3, R6_
+  - [ ] 10.3 Implement streamable anomaly generation along learned directions
+    - Generate anomalies as `x' = x ± Δ v_k` with labels `labels_type ∈ {1,2}` and `labels_target = k`, and do not require materializing all anomalies in memory.
+    - _Requirements: R3, R6_
+  - [ ] 10.4 Update the runner to respect ordering constraints for `reference_model_decoder`
+    - Ensure `reference_model_name` is trained before building feature directions, then reuse the same direction set for evaluating all model variants within the same leaf run.
+    - _Requirements: R3, R6_
+  - [ ] 10.5 Extend evaluation to support `target_kind="direction"`
+    - Compute per-direction recall arrays, direction coverage, and persist `target_kind` and `num_targets` in evaluation artifacts and the run-level comparison summary.
+    - _Requirements: R5, R6_
+  - [ ] 10.6 Add tests for feature-direction anomaly mode
+    - Test determinism of direction selection, and verify perturbations satisfy `x_anom - x_base = ±Δ v_k` within tolerance.
+    - _Requirements: R7_
+
+- [ ] 11. Add localized score pooling and optional target-restricted scoring (5C)
+  - [ ] 11.1 Add `DirectionalDeviationScoringConfig`
+    - Add `pooling ∈ {sum, max, topk}`, `topk_k`, and `target_restricted_scoring`.
+    - Validate `1 ≤ topk_k ≤ d_hidden` when `pooling="topk"`.
+    - _Requirements: R1, R4_
+  - [ ] 11.2 Implement pooling for sign-aware and baseline scoring
+    - Implement a shared pooling helper and apply it consistently to the per-latent exceedance tensors for `Score_high` and `Score_low`.
+    - _Requirements: R4_
+  - [ ] 11.3 Implement target-restricted scoring for `shift_mode="single_channel"`
+    - Precompute `latent_argmax_channel[i] = argmax_j |D[j,i]|` and restrict scoring for channel `j` to latents mapped to `j`, define score 0 when unmapped.
+    - _Requirements: R4, R5_
+  - [ ] 11.4 Add tests for pooling and target-restricted scoring
+    - Unit test `sum`, `max`, and `topk` pooling on fixed tensors, and verify restricted scoring uses only mapped latents.
+    - _Requirements: R7_
+
+- [ ] 12. Add decoder alignment diagnostics and plots (5D)
+  - [ ] 12.1 Implement decoder alignment diagnostics
+    - Compute `latent_argmax_channel`, `latent_purity`, `unique_channels_claimed`, and summary stats, then write `models/<model_name>/decoder_alignment.json`.
+    - _Requirements: R5, R6_
+  - [ ] 12.2 Integrate diagnostics into run summaries and plotting
+    - Include alignment summary fields in `models/<model_name>/evaluation.json` and in the run-level `comparison_summary.json`.
+    - Add `decoder_purity_hist.png` per model and `unique_channels_vs_width.png` for width sweeps.
+    - _Requirements: R5, R6_
+  - [ ] 12.3 Add tests for alignment diagnostics
+    - Verify purity is 1.0 for one-hot decoder columns, and matches the expected value for uniform columns within tolerance.
+    - _Requirements: R7_
+
+- [ ] 13. Update docs
+  - [ ] 13.1 Update `README.md` Protocol B reproduction steps and expected artifacts
+    - Document new config fields, the new `feature_direction` mode, pooling options, and the new diagnostics artifacts and plots.
+    - _Requirements: R6_
