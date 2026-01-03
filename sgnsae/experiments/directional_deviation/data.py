@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import random
 from dataclasses import asdict, dataclass
@@ -20,6 +21,7 @@ LABEL_TYPE_LOW = 2
 
 _TORCH_SEED_MODULUS = 2**63
 _NUMPY_SEED_MODULUS = 2**32
+_UNIFORM_EPSILON = 1e-6
 
 
 def set_random_seed(seed: int) -> None:
@@ -40,18 +42,94 @@ def _create_cpu_generator(seed: int) -> torch.Generator:
     return generator
 
 
+def _sample_iid_non_gaussian_split(
+    num_samples: int,
+    config: DirectionalDeviationDataConfig,
+    generator: torch.Generator,
+) -> Tensor:
+    if config.non_gaussian_dist is None:
+        raise ValueError(
+            f"non_gaussian_dist must be provided when normal_mode='{config.normal_mode}'."
+        )
+
+    if config.non_gaussian_dist == "laplace":
+        scale = 1.0 / math.sqrt(2.0)
+        u = (
+            torch.rand(
+                (num_samples, config.num_channels),
+                device="cpu",
+                dtype=torch.float32,
+                generator=generator,
+            )
+            .clamp(min=_UNIFORM_EPSILON)
+            .sub(0.5)
+        )
+        return -scale * torch.sign(u) * torch.log1p(-2.0 * torch.abs(u))
+
+    if config.non_gaussian_dist == "logistic":
+        scale = math.sqrt(3.0) / math.pi
+        u = torch.rand(
+            (num_samples, config.num_channels),
+            device="cpu",
+            dtype=torch.float32,
+            generator=generator,
+        ).clamp(min=_UNIFORM_EPSILON, max=1.0 - _UNIFORM_EPSILON)
+        return scale * torch.logit(u)
+
+    if config.non_gaussian_dist == "student_t":
+        if config.student_t_df is None:
+            raise ValueError(
+                "student_t_df must be provided when non_gaussian_dist='student_t'."
+            )
+        df = float(config.student_t_df)
+        z = torch.randn(
+            (num_samples, config.num_channels),
+            device="cpu",
+            dtype=torch.float32,
+            generator=generator,
+        )
+        gamma_samples = torch._standard_gamma(
+            torch.full(
+                (num_samples, config.num_channels),
+                df / 2.0,
+                device="cpu",
+                dtype=torch.float32,
+            ),
+            generator=generator,
+        )
+        chi_squared = 2.0 * gamma_samples
+        student_t_samples = z / torch.sqrt(chi_squared / df)
+        unit_variance_scale = math.sqrt((df - 2.0) / df)
+        return unit_variance_scale * student_t_samples
+
+    raise ValueError(f"Unsupported non_gaussian_dist={config.non_gaussian_dist}.")
+
+
 def _sample_normal_split(
     num_samples: int,
     config: DirectionalDeviationDataConfig,
     generator: torch.Generator,
 ) -> Tensor:
-    samples = torch.randn(
-        (num_samples, config.num_channels),
-        device="cpu",
-        dtype=torch.float32,
-        generator=generator,
-    )
-    if config.normal_mode == "heteroskedastic_normal":
+    if config.normal_mode in {"standard_normal", "heteroskedastic_normal"}:
+        samples = torch.randn(
+            (num_samples, config.num_channels),
+            device="cpu",
+            dtype=torch.float32,
+            generator=generator,
+        )
+    elif config.normal_mode in {"iid_non_gaussian", "non_gaussian_heteroskedastic"}:
+        samples = _sample_iid_non_gaussian_split(num_samples, config, generator)
+    else:
+        raise ValueError(f"Unsupported normal_mode={config.normal_mode}.")
+
+    if config.normal_mode in {
+        "heteroskedastic_normal",
+        "non_gaussian_heteroskedastic",
+    }:
+        if config.channel_stds is None:
+            raise ValueError(
+                f"channel_stds must be provided when normal_mode='{config.normal_mode}'."
+            )
         channel_stds = torch.tensor(
             config.channel_stds, device="cpu", dtype=torch.float32
         ).unsqueeze(0)
@@ -394,6 +472,19 @@ def export_data_summary(
     os.makedirs(data_dir, exist_ok=True)
 
     generator_config = asdict(data_config)
+    if data_config.normal_mode in {"iid_non_gaussian", "non_gaussian_heteroskedastic"}:
+        derived_config: Dict[str, Any] = {}
+        if data_config.non_gaussian_dist == "laplace":
+            derived_config["laplace_scale"] = 1.0 / math.sqrt(2.0)
+        elif data_config.non_gaussian_dist == "logistic":
+            derived_config["logistic_scale"] = math.sqrt(3.0) / math.pi
+        elif data_config.non_gaussian_dist == "student_t":
+            if data_config.student_t_df is not None:
+                df = float(data_config.student_t_df)
+                derived_config["student_t_unit_variance_scale"] = math.sqrt(
+                    (df - 2.0) / df
+                )
+        generator_config["non_gaussian_derived"] = derived_config
     generator_config["seed_plan"] = {
         "train_seed": _normalize_torch_seed(data_config.seed + 0),
         "val_seed": _normalize_torch_seed(data_config.seed + 1),

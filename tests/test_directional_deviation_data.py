@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -251,6 +252,239 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
         self.assertTrue(torch.equal(normal_data["x_train"], expected_train))
         self.assertTrue(torch.equal(normal_data["x_val"], expected_val))
         self.assertTrue(torch.equal(normal_data["x_test_normal"], expected_test_normal))
+
+    def test_generate_normal_data_non_gaussian_modes_are_deterministic_with_seed(
+        self,
+    ) -> None:
+        # given
+        base_kwargs: Dict[str, Any] = {
+            "seed": 9,
+            "num_train": 17,
+            "num_val": 11,
+            "num_test_normal": 5,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 4,
+            "noise_std": 0.0,
+            "anomaly_eval_mode": "stream",
+        }
+
+        # when & then
+        for normal_mode, extra_kwargs in (
+            ("iid_non_gaussian", {"non_gaussian_dist": "laplace"}),
+            ("iid_non_gaussian", {"non_gaussian_dist": "logistic"}),
+            (
+                "iid_non_gaussian",
+                {"non_gaussian_dist": "student_t", "student_t_df": 7.0},
+            ),
+            (
+                "non_gaussian_heteroskedastic",
+                {
+                    "non_gaussian_dist": "laplace",
+                    "channel_stds": [0.5, 1.0, 2.0, 3.0],
+                },
+            ),
+        ):
+            with self.subTest(normal_mode=normal_mode, extra_kwargs=extra_kwargs):
+                config = DirectionalDeviationDataConfig(
+                    **base_kwargs,
+                    normal_mode=normal_mode,  # type: ignore[arg-type]
+                    **extra_kwargs,
+                )
+
+                first = generate_normal_data(config, self.device)
+                second = generate_normal_data(config, self.device)
+
+                for key in first:
+                    self.assertTrue(torch.equal(first[key], second[key]))
+
+    def test_generate_normal_data_non_gaussian_modes_have_expected_variance(
+        self,
+    ) -> None:
+        # given
+        sample_count = 50_000
+        base_kwargs: Dict[str, Any] = {
+            "seed": 21,
+            "num_train": sample_count,
+            "num_val": 1,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 3,
+            "noise_std": 0.0,
+            "anomaly_eval_mode": "stream",
+        }
+
+        # when & then
+        for normal_mode, extra_kwargs, expected_variances in (
+            ("iid_non_gaussian", {"non_gaussian_dist": "laplace"}, [1.0, 1.0, 1.0]),
+            ("iid_non_gaussian", {"non_gaussian_dist": "logistic"}, [1.0, 1.0, 1.0]),
+            (
+                "iid_non_gaussian",
+                {"non_gaussian_dist": "student_t", "student_t_df": 10.0},
+                [1.0, 1.0, 1.0],
+            ),
+            (
+                "non_gaussian_heteroskedastic",
+                {
+                    "non_gaussian_dist": "laplace",
+                    "channel_stds": [0.5, 1.5, 2.0],
+                },
+                [0.25, 2.25, 4.0],
+            ),
+        ):
+            with self.subTest(normal_mode=normal_mode, extra_kwargs=extra_kwargs):
+                config = DirectionalDeviationDataConfig(
+                    **base_kwargs,
+                    normal_mode=normal_mode,  # type: ignore[arg-type]
+                    **extra_kwargs,
+                )
+
+                normal_data = generate_normal_data(config, self.device)
+                x_train = normal_data["x_train"].double()
+                means = x_train.mean(dim=0)
+                variances = x_train.var(dim=0, unbiased=False)
+
+                for channel_index, expected_variance in enumerate(expected_variances):
+                    self.assertLess(abs(float(means[channel_index])), 0.05)
+                    relative_error = (
+                        abs(float(variances[channel_index] - expected_variance))
+                        / expected_variance
+                    )
+                    self.assertLess(relative_error, 0.1)
+
+    def test_generate_normal_data_gaussian_modes_have_expected_variance(
+        self,
+    ) -> None:
+        # given
+        sample_count = 50_000
+        base_kwargs: Dict[str, Any] = {
+            "seed": 22,
+            "num_train": sample_count,
+            "num_val": 1,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 3,
+            "noise_std": 0.0,
+            "anomaly_eval_mode": "stream",
+        }
+
+        # when & then
+        for normal_mode, extra_kwargs, expected_variances in (
+            ("standard_normal", {}, [1.0, 1.0, 1.0]),
+            (
+                "heteroskedastic_normal",
+                {"channel_stds": [0.5, 1.5, 2.0]},
+                [0.25, 2.25, 4.0],
+            ),
+        ):
+            with self.subTest(normal_mode=normal_mode, extra_kwargs=extra_kwargs):
+                config = DirectionalDeviationDataConfig(
+                    **base_kwargs,
+                    normal_mode=normal_mode,  # type: ignore[arg-type]
+                    **extra_kwargs,
+                )
+                normal_data = generate_normal_data(config, self.device)
+                x_train = normal_data["x_train"].double()
+                means = x_train.mean(dim=0)
+                variances = x_train.var(dim=0, unbiased=False)
+
+                for channel_index, expected_variance in enumerate(expected_variances):
+                    self.assertLess(abs(float(means[channel_index])), 0.05)
+                    relative_error = (
+                        abs(float(variances[channel_index] - expected_variance))
+                        / expected_variance
+                    )
+                    self.assertLess(relative_error, 0.1)
+
+    def test_sample_normal_split_raises_for_invalid_config_state(self) -> None:
+        # given
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(0)
+
+        # when & then
+        config_missing_dist = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=2,
+            normal_mode="iid_non_gaussian",
+            non_gaussian_dist="laplace",
+            anomaly_eval_mode="stream",
+        )
+        config_missing_dist.non_gaussian_dist = None
+        with self.assertRaises(ValueError):
+            _ = data_module._sample_normal_split(1, config_missing_dist, generator)
+
+        config_missing_df = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=2,
+            normal_mode="iid_non_gaussian",
+            non_gaussian_dist="student_t",
+            student_t_df=7.0,
+            anomaly_eval_mode="stream",
+        )
+        config_missing_df.student_t_df = None
+        with self.assertRaises(ValueError):
+            _ = data_module._sample_normal_split(1, config_missing_df, generator)
+
+        config_unsupported_dist = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=2,
+            normal_mode="iid_non_gaussian",
+            non_gaussian_dist="laplace",
+            anomaly_eval_mode="stream",
+        )
+        config_unsupported_dist.non_gaussian_dist = "unsupported"  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = data_module._sample_normal_split(1, config_unsupported_dist, generator)
+
+        config_unsupported_mode = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=2,
+            normal_mode="standard_normal",
+            anomaly_eval_mode="stream",
+        )
+        config_unsupported_mode.normal_mode = "unsupported"  # type: ignore[assignment]
+        with self.assertRaises(ValueError):
+            _ = data_module._sample_normal_split(1, config_unsupported_mode, generator)
+
+        config_missing_channel_stds = DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=1,
+            num_val=1,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=2,
+            normal_mode="heteroskedastic_normal",
+            channel_stds=[1.0, 2.0],
+            anomaly_eval_mode="stream",
+        )
+        config_missing_channel_stds.channel_stds = None
+        with self.assertRaises(ValueError):
+            _ = data_module._sample_normal_split(
+                1, config_missing_channel_stds, generator
+            )
 
     def test_generate_anomaly_test_data_single_channel_materialize_matches_expected(
         self,
@@ -555,6 +789,86 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             self.assertEqual(sampled["x_test_anomaly"].shape, (5, 5))
             self.assertEqual(sampled["labels_type"].shape, (5,))
             self.assertEqual(sampled["labels_channel"].shape, (5,))
+
+    def test_export_data_summary_records_non_gaussian_derived_parameters(
+        self,
+    ) -> None:
+        # given
+        base_kwargs: Dict[str, Any] = {
+            "seed": 2,
+            "num_train": 10,
+            "num_val": 11,
+            "num_test_normal": 12,
+            "num_test_high_per_channel": 2,
+            "num_test_low_per_channel": 3,
+            "num_channels": 5,
+            "noise_std": 0.0,
+            "normal_mode": "iid_non_gaussian",
+            "anomaly_eval_mode": "stream",
+        }
+        anomaly_config = DirectionalDeviationAnomalyConfig(
+            delta=4.0, shift_mode="single_channel"
+        )
+
+        # when & then
+        for non_gaussian_dist, extra_kwargs, expected_key, expected_value in (
+            (
+                "laplace",
+                {},
+                "laplace_scale",
+                1.0 / math.sqrt(2.0),
+            ),
+            (
+                "logistic",
+                {},
+                "logistic_scale",
+                math.sqrt(3.0) / math.pi,
+            ),
+            (
+                "student_t",
+                {"student_t_df": 7.0},
+                "student_t_unit_variance_scale",
+                math.sqrt((7.0 - 2.0) / 7.0),
+            ),
+        ):
+            with self.subTest(non_gaussian_dist=non_gaussian_dist):
+                data_config = DirectionalDeviationDataConfig(
+                    **base_kwargs,
+                    non_gaussian_dist=non_gaussian_dist,  # type: ignore[arg-type]
+                    **extra_kwargs,
+                )
+                normal_data = generate_normal_data(data_config, self.device)
+                anomaly_data = generate_anomaly_test_data(
+                    data_config, anomaly_config, self.device, batch_size=4
+                )
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    export_data_summary(
+                        tmpdir,
+                        data_config,
+                        anomaly_config,
+                        normal_data,
+                        anomaly_data,
+                        sample_preview_count=4,
+                        anomaly_preview_count=5,
+                    )
+
+                    with open(
+                        os.path.join(tmpdir, "data", "generator_config.json"), "r"
+                    ) as f:
+                        generator_config = json.load(f)
+
+                self.assertEqual(generator_config["normal_mode"], "iid_non_gaussian")
+                self.assertEqual(
+                    generator_config["non_gaussian_dist"], non_gaussian_dist
+                )
+                self.assertIn("non_gaussian_derived", generator_config)
+                self.assertIn(expected_key, generator_config["non_gaussian_derived"])
+                self.assertAlmostEqual(
+                    generator_config["non_gaussian_derived"][expected_key],
+                    expected_value,
+                    places=7,
+                )
 
     def test_export_data_summary_writes_expected_files_for_materialized_anomalies(
         self,

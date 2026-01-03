@@ -317,6 +317,169 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 **{**base_kwargs, "channel_stds": [1.0, 2.0]}
             )
 
+    def test_data_config_validates_channel_stds_uniqueness_when_enabled(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": 1,
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 2,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{
+                    **base_kwargs,
+                    "normal_mode": "heteroskedastic_normal",
+                    "channel_stds": [1.0, 1.0],
+                }
+            )
+
+        config_ok = config_module.DirectionalDeviationDataConfig(
+            **{
+                **base_kwargs,
+                "normal_mode": "heteroskedastic_normal",
+                "channel_stds": [1.0, 1.0],
+                "ensure_unique_channel_stds": False,
+            }
+        )
+        self.assertFalse(config_ok.ensure_unique_channel_stds)
+
+    def test_data_config_non_gaussian_modes_require_distribution_and_validate_df(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "seed": 1,
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 4,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{**base_kwargs, "normal_mode": "iid_non_gaussian"}
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{
+                    **base_kwargs,
+                    "normal_mode": "iid_non_gaussian",
+                    "non_gaussian_dist": "invalid",  # type: ignore[arg-type]
+                }
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{
+                    **base_kwargs,
+                    "normal_mode": "iid_non_gaussian",
+                    "non_gaussian_dist": "student_t",
+                }
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{
+                    **base_kwargs,
+                    "normal_mode": "iid_non_gaussian",
+                    "non_gaussian_dist": "student_t",
+                    "student_t_df": 2.0,
+                }
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{
+                    **base_kwargs,
+                    "normal_mode": "iid_non_gaussian",
+                    "non_gaussian_dist": "laplace",
+                    "student_t_df": 3.0,
+                }
+            )
+
+        config_laplace_ok = config_module.DirectionalDeviationDataConfig(
+            **{
+                **base_kwargs,
+                "normal_mode": "iid_non_gaussian",
+                "non_gaussian_dist": "laplace",
+            }
+        )
+        self.assertEqual(config_laplace_ok.non_gaussian_dist, "laplace")
+
+        config_student_t_ok = config_module.DirectionalDeviationDataConfig(
+            **{
+                **base_kwargs,
+                "normal_mode": "iid_non_gaussian",
+                "non_gaussian_dist": "student_t",
+                "student_t_df": 3.0,
+            }
+        )
+        self.assertEqual(config_student_t_ok.student_t_df, 3.0)
+
+    def test_data_config_non_gaussian_heteroskedastic_requires_channel_stds(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "seed": 1,
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 2,
+            "normal_mode": "non_gaussian_heteroskedastic",
+            "non_gaussian_dist": "logistic",
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(**base_kwargs)
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{**base_kwargs, "channel_stds": [1.0, 1.0]}
+            )
+
+        config_ok = config_module.DirectionalDeviationDataConfig(
+            **{
+                **base_kwargs,
+                "channel_stds": [1.0, 1.0],
+                "ensure_unique_channel_stds": False,
+            }
+        )
+        self.assertEqual(config_ok.normal_mode, "non_gaussian_heteroskedastic")
+
+    def test_data_config_rejects_non_gaussian_fields_for_gaussian_modes(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "seed": 1,
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 4,
+            "normal_mode": "standard_normal",
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{**base_kwargs, "non_gaussian_dist": "laplace"}
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(
+                **{**base_kwargs, "student_t_df": 7.0}
+            )
+
     def test_data_config_rejects_invalid_modes(self) -> None:
         # given
         base_kwargs = {

@@ -124,22 +124,22 @@
     - Run a tiny config with `anomaly_eval_mode="stream"` and assert evaluation completes and artifacts are written.
     - _Requirements: 1.8_
 
-- [ ] 9. Add symmetry-breaking normal distributions (5A)
-  - [ ] 9.1 Extend `DirectionalDeviationDataConfig` for non-Gaussian normal modes
+- [x] 9. Add symmetry-breaking normal distributions (5A)
+  - [x] 9.1 Extend `DirectionalDeviationDataConfig` for non-Gaussian normal modes
     - Add `normal_mode` values: `iid_non_gaussian`, `non_gaussian_heteroskedastic`.
     - Add `non_gaussian_dist` (`laplace`, `logistic`, `student_t`), `student_t_df`, and `ensure_unique_channel_stds`.
     - Add config validation: `student_t_df > 2`, `channel_stds` length equals `num_channels`, all stds > 0, optionally enforce uniqueness.
     - _Requirements: R1, R2_
-  - [ ] 9.2 Implement IID non-Gaussian normal sampling with unit variance
+  - [x] 9.2 Implement IID non-Gaussian normal sampling with unit variance
     - Laplace: use `b = 1/sqrt(2)` to obtain variance 1.
     - Logistic: use `s = sqrt(3)/pi` to obtain variance 1.
     - Student-t: scale by `sqrt((df-2)/df)` for df>2 to obtain variance 1.
     - Apply `noise_std` last, after any non-Gaussian and/or heteroskedastic scaling.
     - _Requirements: R2_
-  - [ ] 9.3 Extend generator artifact export for new modes
+  - [x] 9.3 Extend generator artifact export for new modes
     - Record `normal_mode`, `non_gaussian_dist`, derived scale parameters, and `channel_stds` (when used) in `data/generator_config.json`.
     - _Requirements: R2, R6_
-  - [ ] 9.4 Add tests for symmetry-breaking normal generation
+  - [x] 9.4 Add tests for symmetry-breaking normal generation
     - Add `unittest` coverage for determinism (same seed) and variance sanity checks for each `normal_mode`.
     - _Requirements: R7_
 

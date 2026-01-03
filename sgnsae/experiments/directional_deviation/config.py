@@ -53,10 +53,16 @@ class DirectionalDeviationDataConfig:
     num_test_low_per_channel: int
     num_channels: int
     noise_std: float = 0.0
-    normal_mode: Literal["standard_normal", "heteroskedastic_normal"] = (
-        "standard_normal"
-    )
+    normal_mode: Literal[
+        "standard_normal",
+        "heteroskedastic_normal",
+        "iid_non_gaussian",
+        "non_gaussian_heteroskedastic",
+    ] = "standard_normal"
     channel_stds: Optional[List[float]] = None
+    ensure_unique_channel_stds: bool = True
+    non_gaussian_dist: Optional[Literal["laplace", "logistic", "student_t"]] = None
+    student_t_df: Optional[float] = None
     anomaly_eval_mode: Literal["materialize", "stream"] = "stream"
     train_anomaly_fraction: float = 0.0
     seeds: Optional[List[int]] = None
@@ -73,15 +79,27 @@ class DirectionalDeviationDataConfig:
 
         _validate_non_negative_float(self.noise_std, "noise_std")
 
-        if self.normal_mode not in {"standard_normal", "heteroskedastic_normal"}:
+        allowed_normal_modes = {
+            "standard_normal",
+            "heteroskedastic_normal",
+            "iid_non_gaussian",
+            "non_gaussian_heteroskedastic",
+        }
+        if self.normal_mode not in allowed_normal_modes:
             raise ValueError(
-                "normal_mode must be one of 'standard_normal' or 'heteroskedastic_normal'; "
-                f"received {self.normal_mode}."
+                "normal_mode must be one of "
+                "'standard_normal', 'heteroskedastic_normal', 'iid_non_gaussian', or "
+                f"'non_gaussian_heteroskedastic'; received {self.normal_mode}."
             )
-        if self.normal_mode == "heteroskedastic_normal":
+
+        uses_channel_stds = self.normal_mode in {
+            "heteroskedastic_normal",
+            "non_gaussian_heteroskedastic",
+        }
+        if uses_channel_stds:
             if self.channel_stds is None:
                 raise ValueError(
-                    "channel_stds must be provided when normal_mode='heteroskedastic_normal'."
+                    f"channel_stds must be provided when normal_mode='{self.normal_mode}'."
                 )
             if len(self.channel_stds) != self.num_channels:
                 raise ValueError(
@@ -90,13 +108,54 @@ class DirectionalDeviationDataConfig:
                 )
             for channel_std in self.channel_stds:
                 if channel_std <= 0:
-                    raise ValueError(
-                        "All channel_stds entries must be positive when normal_mode='heteroskedastic_normal'."
-                    )
+                    raise ValueError("All channel_stds entries must be positive.")
+            if self.ensure_unique_channel_stds and len(set(self.channel_stds)) != len(
+                self.channel_stds
+            ):
+                raise ValueError(
+                    "channel_stds must not contain duplicates when ensure_unique_channel_stds=True."
+                )
         elif self.channel_stds is not None:
             raise ValueError(
-                "channel_stds must be omitted when normal_mode='standard_normal'."
+                f"channel_stds must be omitted when normal_mode='{self.normal_mode}'."
             )
+
+        uses_non_gaussian_dist = self.normal_mode in {
+            "iid_non_gaussian",
+            "non_gaussian_heteroskedastic",
+        }
+        if uses_non_gaussian_dist:
+            if self.non_gaussian_dist is None:
+                raise ValueError(
+                    f"non_gaussian_dist must be provided when normal_mode='{self.normal_mode}'."
+                )
+            if self.non_gaussian_dist not in {"laplace", "logistic", "student_t"}:
+                raise ValueError(
+                    "non_gaussian_dist must be one of 'laplace', 'logistic', or 'student_t'; "
+                    f"received {self.non_gaussian_dist}."
+                )
+            if self.non_gaussian_dist == "student_t":
+                if self.student_t_df is None:
+                    raise ValueError(
+                        "student_t_df must be provided when non_gaussian_dist='student_t'."
+                    )
+                if self.student_t_df <= 2:
+                    raise ValueError(
+                        f"student_t_df must be > 2; received {self.student_t_df}."
+                    )
+            elif self.student_t_df is not None:
+                raise ValueError(
+                    "student_t_df must be omitted unless non_gaussian_dist='student_t'."
+                )
+        else:
+            if self.non_gaussian_dist is not None:
+                raise ValueError(
+                    f"non_gaussian_dist must be omitted when normal_mode='{self.normal_mode}'."
+                )
+            if self.student_t_df is not None:
+                raise ValueError(
+                    f"student_t_df must be omitted when normal_mode='{self.normal_mode}'."
+                )
 
         if self.anomaly_eval_mode not in {"materialize", "stream"}:
             raise ValueError(
