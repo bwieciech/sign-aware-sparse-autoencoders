@@ -81,13 +81,74 @@ If your tests produce artifacts, make sure they are cleaned up after the test ru
 
 Always run tests and make sure they pass after you have finished developing the feature you were working on.
 
-Aim for at least 95% test coverage of your code, excluding dataclasses or scripts located under `multilayerai/scripts`.
+Aim for 100% test coverage of your code, excluding dataclasses or scripts located under `<repository_root>/scripts`.
 If you are unable to achieve this, explain why to the user. Use `Coverage.py` for measuring test coverage in Python
 after finishing the implementation of every task. The coverage should be measured for functions, methods and classes
 you have added or modified.
 
 For tests involving arrays or tensors, apart from checking for correct shapes, you should also check whether the calculated
-values are equal to (or almost equal for floating point numbers) the expected results.
+values are equal to (or almost equal for floating point numbers) the expected results. An example is shown below, with the
+expected level of detail and style, with some elements calculated manually:
+```python
+def multiply_by_transpose(
+    matrix_1: NDArray[float],
+    matrix_2: NDArray[float]
+) -> NDArray[float]:
+    return matrix_1 @ matrix_2.T
+```
+```python
+class TestSuite(unittest.TestCase):
+    def test_multiply_by_transpose_of_identity_matrix_returns_original_matrix(self):
+        # given
+        matrix_1 = np.array([[1, 2], [3, 4]])
+        matrix_2 = np.eye(2)
+
+        # when
+        result = multiply_by_transpose(matrix_1, matrix_2)
+
+        # then
+        np.testing.assert_array_equal(result, matrix_1)
+
+    def test_multiply_by_transpose_of_itself_returns_square_matrix(self):
+        # given
+        matrix_1 = np.array([[1, 2, 3], [4, 5, 6]])
+        expected = np.array(
+            [
+                [
+                    matrix_1[0, 0] * matrix_1[0, 0]
+                    + matrix_1[0, 1] * matrix_1[0, 1]
+                    + matrix_1[0, 2] * matrix_1[0, 2],
+                    matrix_1[0, 0] * matrix_1[1, 0]
+                    + matrix_1[0, 1] * matrix_1[1, 1]
+                    + matrix_1[0, 2] * matrix_1[1, 2],
+                ],
+                [
+                    matrix_1[1, 0] * matrix_1[0, 0]
+                    + matrix_1[1, 1] * matrix_1[0, 1]
+                    + matrix_1[1, 2] * matrix_1[0, 2],
+                    matrix_1[1, 0] * matrix_1[1, 0]
+                    + matrix_1[1, 1] * matrix_1[1, 1]
+                    + matrix_1[1, 2] * matrix_1[1, 2],
+                ],
+            ]
+        )
+
+        # when
+        result = multiply_by_transpose(matrix_1, matrix_1)
+
+        # then
+        self.assertEqual(result.shape, (2, 2))
+        np.testing.assert_array_equal(result, expected)
+
+    def test_multiply_by_transpose_fails_on_dimension_mismatch(self):
+        # given
+        matrix_1 = np.array([[1, 2, 3], [4, 5, 6]])  # shape -> (2, 3)
+        matrix_2 = matrix_1.T  # shape -> (3, 2)
+
+        # when / then
+        with self.assertRaises(ValueError):
+            multiply_by_transpose(matrix_1, matrix_2)  # (2, 3) @ (3, 2).T -> invalid
+```
 
 If you use an existing piece of code from the codebase, check if it is already covered by tests. If not, add extensive
 tests for it.
