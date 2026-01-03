@@ -672,11 +672,22 @@ def _compute_directional_scores(
                 else None
             )
         )
-        latent_directions = assign_baseline_latent_directions(
-            model=model,
-            shift_mode=shift_mode,
-            subset_indices=subset_indices_list,
-        ).to("cpu")
+        latent_directions = _load_torch_tensor_if_present(
+            os.path.join(thresholds_dir, "latent_directions.pt")
+        )
+        if latent_directions is None:
+            latent_directions = assign_baseline_latent_directions(
+                model=model,
+                shift_mode=shift_mode,
+                subset_indices=subset_indices_list,
+            ).to("cpu")
+        else:
+            if latent_directions.ndim != 1:
+                raise ValueError(
+                    "Expected latent_directions.ndim == 1, got "
+                    f"{latent_directions.ndim}."
+                )
+            latent_directions = latent_directions.to(device="cpu", dtype=torch.int64)
         baseline_thresholds = BaselineEvidenceThresholds(
             evidence_tau=evidence_tau,
             latent_directions=latent_directions,

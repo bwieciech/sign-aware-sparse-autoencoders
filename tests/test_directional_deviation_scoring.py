@@ -948,6 +948,9 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
                 os.path.exists(os.path.join(baseline_dir, "evidence_tau.pt"))
             )
             self.assertTrue(
+                os.path.exists(os.path.join(baseline_dir, "latent_directions.pt"))
+            )
+            self.assertTrue(
                 os.path.exists(os.path.join(baseline_dir, "score_thresholds.json"))
             )
             self.assertTrue(
@@ -973,6 +976,21 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
             with open(os.path.join(sign_dir, "thresholds_metadata.json"), "r") as f:
                 saved_metadata = json.load(f)
             self.assertEqual(saved_metadata, metadata)
+
+            loaded_evidence_tau = torch.load(
+                os.path.join(baseline_dir, "evidence_tau.pt")
+            )
+            loaded_latent_directions = torch.load(
+                os.path.join(baseline_dir, "latent_directions.pt")
+            )
+            self.assertTrue(
+                torch.allclose(loaded_evidence_tau, baseline_thresholds.evidence_tau)
+            )
+            self.assertTrue(
+                torch.equal(
+                    loaded_latent_directions, baseline_thresholds.latent_directions
+                )
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

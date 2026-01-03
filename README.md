@@ -265,7 +265,7 @@ Per model (`<run_dir>/models/<model_name>/`):
 - `thresholds/thresholds_metadata.json`
 - `thresholds/score_thresholds.json`
 - `evaluation.json`
-- Baseline models also write `thresholds/evidence_tau.pt`
+- Baseline models also write per-latent direction assignments to `thresholds/latent_directions.pt`
 - Sign-aware models also write `thresholds/tau_plus.pt` and `thresholds/tau_minus.pt`
 
 Width sweep only:

@@ -406,6 +406,10 @@ def persist_baseline_threshold_artifacts(
         baseline_thresholds.evidence_tau.detach().cpu(),
         os.path.join(thresholds_dir, "evidence_tau.pt"),
     )
+    torch.save(
+        baseline_thresholds.latent_directions.detach().cpu(),
+        os.path.join(thresholds_dir, "latent_directions.pt"),
+    )
     _persist_score_thresholds(
         thresholds_dir=thresholds_dir,
         score_thresholds=score_thresholds,
