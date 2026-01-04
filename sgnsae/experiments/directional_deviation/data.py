@@ -206,6 +206,7 @@ def build_fixed_random_directions(
 
     metadata: Dict[str, Any] = {
         "direction_source": "fixed_random",
+        "direction_selection": "fixed_random",
         "normalize_directions": bool(anomaly_config.normalize_directions),
         "seed_plan": {"direction_seed": _normalize_torch_seed(direction_seed)},
     }
@@ -448,6 +449,7 @@ def _build_feature_direction_anomaly_manifest(
         "target_kind": "direction",
         "num_channels": data_config.num_channels,
         "num_directions": num_directions,
+        "base_samples": anomaly_config.base_samples,
         "direction_source": anomaly_config.direction_source,
         "reference_model_name": (
             anomaly_config.reference_model_name
@@ -455,7 +457,12 @@ def _build_feature_direction_anomaly_manifest(
             else None
         ),
         "direction_selection": direction_metadata.get(
-            "direction_selection", anomaly_config.direction_selection
+            "direction_selection",
+            (
+                "fixed_random"
+                if anomaly_config.direction_source == "fixed_random"
+                else anomaly_config.direction_selection
+            ),
         ),
         "direction_latent_indices": direction_metadata.get("direction_latent_indices"),
         "direction_latent_purity": direction_metadata.get("direction_latent_purity"),
@@ -636,7 +643,15 @@ def generate_anomaly_test_data(
 
     if anomaly_config.shift_mode == "feature_direction":
         direction_seed = data_config.seed + 6
-        sample_seed = data_config.seed + 4
+        if anomaly_config.base_samples == "test_normal":
+            sample_seed = data_config.seed + 2
+        elif anomaly_config.base_samples == "val_normal":
+            sample_seed = data_config.seed + 1
+        else:
+            raise ValueError(
+                "base_samples must be one of 'test_normal' or 'val_normal'; "
+                f"received '{anomaly_config.base_samples}'."
+            )
 
         directions: Tensor
         resolved_metadata: Dict[str, Any]
@@ -872,7 +887,23 @@ def export_data_summary(
         "val_seed": _normalize_torch_seed(data_config.seed + 1),
         "test_normal_seed": _normalize_torch_seed(data_config.seed + 2),
         "subset_seed": _normalize_torch_seed(data_config.seed + 3),
-        "anomaly_seed": _normalize_torch_seed(data_config.seed + 4),
+        "anomaly_seed": _normalize_torch_seed(
+            (
+                data_config.seed + 2
+                if (
+                    anomaly_config.shift_mode == "feature_direction"
+                    and anomaly_config.base_samples == "test_normal"
+                )
+                else (
+                    data_config.seed + 1
+                    if (
+                        anomaly_config.shift_mode == "feature_direction"
+                        and anomaly_config.base_samples == "val_normal"
+                    )
+                    else data_config.seed + 4
+                )
+            )
+        ),
         "direction_seed": _normalize_torch_seed(data_config.seed + 6),
     }
     generator_config_path = os.path.join(data_dir, "generator_config.json")

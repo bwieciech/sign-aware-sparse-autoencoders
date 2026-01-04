@@ -106,9 +106,12 @@ class DirectionalDeviationDataConfig:
                     f"channel_stds must have length num_channels={self.num_channels}; "
                     f"received {len(self.channel_stds)}."
                 )
-            for channel_std in self.channel_stds:
-                if channel_std <= 0:
-                    raise ValueError("All channel_stds entries must be positive.")
+            for index, channel_std in enumerate(self.channel_stds):
+                if not (channel_std > 0 and channel_std < float("inf")):
+                    raise ValueError(
+                        "All channel_stds entries must be finite and positive; "
+                        f"received channel_stds[{index}]={channel_std}."
+                    )
             if self.ensure_unique_channel_stds and len(set(self.channel_stds)) != len(
                 self.channel_stds
             ):
@@ -139,9 +142,10 @@ class DirectionalDeviationDataConfig:
                     raise ValueError(
                         "student_t_df must be provided when non_gaussian_dist='student_t'."
                     )
-                if self.student_t_df <= 2:
+                df = float(self.student_t_df)
+                if not (df > 2.0 and df < float("inf")):
                     raise ValueError(
-                        f"student_t_df must be > 2; received {self.student_t_df}."
+                        f"student_t_df must be a finite value > 2; received {self.student_t_df}."
                     )
             elif self.student_t_df is not None:
                 raise ValueError(
@@ -192,6 +196,7 @@ class DirectionalDeviationAnomalyConfig:
     normalize_directions: bool = True
     num_test_high_per_direction: Optional[int] = None
     num_test_low_per_direction: Optional[int] = None
+    base_samples: Literal["test_normal", "val_normal"] = "test_normal"
 
     def __post_init__(self) -> None:
         if self.delta <= 0:
@@ -229,11 +234,21 @@ class DirectionalDeviationAnomalyConfig:
                 raise ValueError(
                     "Feature-direction fields may only be provided when shift_mode='feature_direction'."
                 )
+            if self.base_samples != "test_normal":
+                raise ValueError(
+                    "base_samples may only be changed when shift_mode='feature_direction'; "
+                    f"received base_samples='{self.base_samples}'."
+                )
             return
 
         if self.channels_to_evaluate is not None:
             raise ValueError(
                 "channels_to_evaluate must be omitted when shift_mode='feature_direction'."
+            )
+        if self.base_samples not in {"test_normal", "val_normal"}:
+            raise ValueError(
+                "base_samples must be one of 'test_normal' or 'val_normal' when "
+                f"shift_mode='feature_direction'; received base_samples='{self.base_samples}'."
             )
 
         if self.direction_source is None:

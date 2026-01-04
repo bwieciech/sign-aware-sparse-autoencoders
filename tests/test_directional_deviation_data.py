@@ -1348,6 +1348,12 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             directions = torch.load(directions_path)
             self.assertEqual(tuple(directions.shape), (3, 5))
 
+            manifest_path = os.path.join(data_dir, "anomaly_manifest.json")
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                manifest = json.load(handle)
+            self.assertEqual(manifest["direction_source"], "fixed_random")
+            self.assertEqual(manifest["direction_selection"], "fixed_random")
+
     def test_export_data_summary_records_non_gaussian_derived_parameters(
         self,
     ) -> None:
