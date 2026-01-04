@@ -37,6 +37,7 @@ class DirectionalDeviationEvaluationInputs:
     pooling: PoolingMode = "sum"
     topk_k: Optional[int] = None
     target_restricted_scoring: bool = False
+    decoder_alignment: Optional[Dict[str, Any]] = None
     latent_thresholds: Optional[SignAwareLatentThresholds] = None
     baseline_thresholds: Optional[BaselineEvidenceThresholds] = None
 
@@ -592,6 +593,7 @@ def evaluate_and_persist_directional_deviation(
             "per_direction": None,
             "error": f"{type(exc).__name__}: {exc}",
         }
+    evaluation["decoder_alignment"] = inputs.decoder_alignment
     with open(evaluation_path, "w") as f:
         json.dump(evaluation, f, indent=2)
     return evaluation
@@ -610,6 +612,11 @@ def build_comparison_summary(
         )
         per_direction = (
             evaluation.get("per_direction") if isinstance(evaluation, dict) else None
+        )
+        decoder_alignment = (
+            evaluation.get("decoder_alignment")
+            if isinstance(evaluation, dict)
+            else None
         )
         if target_kind is None and isinstance(evaluation, dict):
             target_kind_value = evaluation.get("target_kind")
@@ -642,6 +649,36 @@ def build_comparison_summary(
             if not isinstance(per_direction, dict)
             else per_direction.get("covered_directions_count")
         )
+        unique_channels_claimed = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("unique_channels_claimed")
+        )
+        purity_mean = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_mean")
+        )
+        purity_median = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_median")
+        )
+        purity_p10 = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_p10")
+        )
+        purity_p50 = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_p50")
+        )
+        purity_p90 = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_p90")
+        )
         models[model_name] = {
             "recall_high": (
                 None if not isinstance(metrics, dict) else metrics.get("recall_high")
@@ -665,6 +702,12 @@ def build_comparison_summary(
             "covered_channels_count": per_channel_count,
             "covered_directions_fraction": per_direction_fraction,
             "covered_directions_count": per_direction_count,
+            "unique_channels_claimed": unique_channels_claimed,
+            "purity_mean": purity_mean,
+            "purity_median": purity_median,
+            "purity_p10": purity_p10,
+            "purity_p50": purity_p50,
+            "purity_p90": purity_p90,
             "error": evaluation.get("error") if isinstance(evaluation, dict) else None,
         }
 

@@ -18,6 +18,7 @@ from sgnsae.experiments.directional_deviation.plotting import (
     _load_pickled_model,
     _load_torch_if_present,
     _load_torch_tensor_if_present,
+    _plot_decoder_purity_histograms,
     _plot_leaf_run_summary,
     _plot_score_histograms_grid_for_models,
     _plot_score_distributions_for_model,
@@ -192,6 +193,102 @@ class TestDirectionalDeviationPlotting(unittest.TestCase):
             # then
             self.assertFalse(
                 os.path.isfile(os.path.join(plots_dir, "leaf_summary.png"))
+            )
+
+    def test_plot_decoder_purity_histograms_returns_when_models_dir_missing(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plots_dir = os.path.join(tmpdir, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+
+            # when
+            _plot_decoder_purity_histograms(run_dir=tmpdir, plots_dir=plots_dir)
+
+            # then
+            self.assertFalse(
+                os.path.isfile(os.path.join(plots_dir, "decoder_purity_hist.png"))
+            )
+
+    def test_plot_decoder_purity_histograms_returns_when_no_models_present(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plots_dir = os.path.join(tmpdir, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+            os.makedirs(os.path.join(tmpdir, "models"), exist_ok=True)
+
+            # when
+            _plot_decoder_purity_histograms(run_dir=tmpdir, plots_dir=plots_dir)
+
+            # then
+            self.assertFalse(
+                os.path.isfile(os.path.join(plots_dir, "decoder_purity_hist.png"))
+            )
+
+    def test_plot_decoder_purity_histograms_skips_invalid_alignment_payloads(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plots_dir = os.path.join(tmpdir, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+            models_dir = os.path.join(tmpdir, "models")
+            os.makedirs(models_dir, exist_ok=True)
+
+            missing_alignment_dir = os.path.join(models_dir, "missing_alignment")
+            os.makedirs(missing_alignment_dir, exist_ok=True)
+
+            error_alignment_dir = os.path.join(models_dir, "error_alignment")
+            os.makedirs(error_alignment_dir, exist_ok=True)
+            with open(
+                os.path.join(error_alignment_dir, "decoder_alignment.json"), "w"
+            ) as f:
+                json.dump({"error": "boom"}, f)
+
+            empty_purity_dir = os.path.join(models_dir, "empty_purity")
+            os.makedirs(empty_purity_dir, exist_ok=True)
+            with open(
+                os.path.join(empty_purity_dir, "decoder_alignment.json"), "w"
+            ) as f:
+                json.dump({"latent_purity": []}, f)
+
+            nan_purity_dir = os.path.join(models_dir, "nan_purity")
+            os.makedirs(nan_purity_dir, exist_ok=True)
+            with open(os.path.join(nan_purity_dir, "decoder_alignment.json"), "w") as f:
+                json.dump({"latent_purity": [float("nan")]}, f)
+
+            # when
+            _plot_decoder_purity_histograms(run_dir=tmpdir, plots_dir=plots_dir)
+
+            # then
+            self.assertFalse(
+                os.path.isfile(os.path.join(plots_dir, "decoder_purity_hist.png"))
+            )
+
+    def test_plot_decoder_purity_histograms_writes_plot_when_valid_alignment_present(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plots_dir = os.path.join(tmpdir, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+            models_dir = os.path.join(tmpdir, "models")
+            os.makedirs(models_dir, exist_ok=True)
+
+            model_dir = os.path.join(models_dir, "relu_sae")
+            os.makedirs(model_dir, exist_ok=True)
+            with open(os.path.join(model_dir, "decoder_alignment.json"), "w") as f:
+                json.dump({"latent_purity": [0.1, 0.25, 0.9]}, f)
+
+            # when
+            _plot_decoder_purity_histograms(run_dir=tmpdir, plots_dir=plots_dir)
+
+            # then
+            self.assertTrue(
+                os.path.isfile(os.path.join(plots_dir, "decoder_purity_hist.png"))
             )
 
     def test_plot_score_distributions_for_models_returns_when_preview_missing(

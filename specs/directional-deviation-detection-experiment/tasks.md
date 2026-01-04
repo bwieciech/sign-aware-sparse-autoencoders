@@ -180,19 +180,19 @@
     - Unit test `sum`, `max`, and `topk` pooling on fixed tensors, and verify restricted scoring uses only mapped latents.
     - _Requirements: R7_
 
-- [ ] 12. Add decoder alignment diagnostics and plots (5D)
-  - [ ] 12.1 Implement decoder alignment diagnostics
+- [x] 12. Add decoder alignment diagnostics and plots (5D)
+  - [x] 12.1 Implement decoder alignment diagnostics
     - Compute `latent_argmax_channel`, `latent_purity`, `unique_channels_claimed`, and summary stats, then write `models/<model_name>/decoder_alignment.json`.
     - _Requirements: R5, R6_
-  - [ ] 12.2 Integrate diagnostics into run summaries and plotting
+  - [x] 12.2 Integrate diagnostics into run summaries and plotting
     - Include alignment summary fields in `models/<model_name>/evaluation.json` and in the run-level `comparison_summary.json`.
     - Add `decoder_purity_hist.png` per model and `unique_channels_vs_width.png` for width sweeps.
     - _Requirements: R5, R6_
-  - [ ] 12.3 Add tests for alignment diagnostics
+  - [x] 12.3 Add tests for alignment diagnostics
     - Verify purity is 1.0 for one-hot decoder columns, and matches the expected value for uniform columns within tolerance.
     - _Requirements: R7_
 
-- [ ] 13. Update docs
-  - [ ] 13.1 Update `README.md` Protocol B reproduction steps and expected artifacts
+- [x] 13. Update docs
+  - [x] 13.1 Update `README.md` Protocol B reproduction steps and expected artifacts
     - Document new config fields, the new `feature_direction` mode, pooling options, and the new diagnostics artifacts and plots.
     - _Requirements: R6_

@@ -50,6 +50,7 @@ def generate_plots_for_run(run_dir: str) -> None:
     models = comparison_summary.get("models")
     if isinstance(models, dict):
         _plot_leaf_run_summary(plots_dir=plots_dir, models=models)
+        _plot_decoder_purity_histograms(run_dir=run_dir, plots_dir=plots_dir)
         _plot_score_distributions_for_models(run_dir=run_dir, plots_dir=plots_dir)
 
 
@@ -85,6 +86,11 @@ def _plot_width_sweep_summary(plots_dir: str, summary: Dict[str, Any]) -> None:
             "Covered Channels Fraction",
             "coverage_vs_width.png",
         ),
+        (
+            "unique_channels_claimed",
+            "Unique Channels Claimed",
+            "unique_channels_vs_width.png",
+        ),
         ("fpr_high", "False Positive Rate (High)", "fpr_high_vs_width.png"),
         ("fpr_low", "False Positive Rate (Low)", "fpr_low_vs_width.png"),
     ):
@@ -96,6 +102,63 @@ def _plot_width_sweep_summary(plots_dir: str, summary: Dict[str, Any]) -> None:
             title=title,
             filename=filename,
         )
+
+
+def _plot_decoder_purity_histograms(run_dir: str, plots_dir: str) -> None:
+    models_root = os.path.join(run_dir, "models")
+    if not os.path.isdir(models_root):
+        return
+
+    model_names = sorted(
+        name
+        for name in os.listdir(models_root)
+        if os.path.isdir(os.path.join(models_root, name))
+    )
+    if not model_names:
+        return
+
+    purities: List[Tuple[str, np.ndarray]] = []
+    for model_name in model_names:
+        alignment = _load_json_if_present(
+            os.path.join(models_root, model_name, "decoder_alignment.json")
+        )
+        if alignment is None:
+            continue
+        if "error" in alignment:
+            continue
+        latent_purity = alignment.get("latent_purity")
+        if not isinstance(latent_purity, list) or not latent_purity:
+            continue
+        purity_values = np.array([float(value) for value in latent_purity])
+        purity_values = purity_values[np.isfinite(purity_values)]
+        if purity_values.size == 0:
+            continue
+        purities.append((model_name, np.clip(purity_values, 0.0, 1.0)))
+
+    if not purities:
+        return
+
+    num_models = len(purities)
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=num_models,
+        figsize=(6.0 * num_models, 4.2),
+        dpi=150,
+        squeeze=False,
+        sharey=True,
+    )
+    bins = np.linspace(0.0, 1.0, num=21, dtype=np.float64)
+    for axis, (model_name, purity_values) in zip(axes[0], purities):
+        axis.hist(purity_values, bins=bins, color="#4c72b0", alpha=0.8)
+        axis.set_title(model_name)
+        axis.set_xlabel("latent_purity")
+        axis.grid(True, axis="y", linestyle="--", alpha=0.35)
+
+    axes[0][0].set_ylabel("count")
+    path = os.path.join(plots_dir, "decoder_purity_hist.png")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def _plot_recall_vs_width(

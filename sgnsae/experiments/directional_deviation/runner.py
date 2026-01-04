@@ -50,6 +50,9 @@ from sgnsae.experiments.directional_deviation.training import (
     run_training_for_variant,
 )
 from sgnsae.experiments.directional_deviation.plotting import generate_plots_for_run
+from sgnsae.experiments.directional_deviation.decoder_alignment import (
+    persist_decoder_alignment_diagnostics,
+)
 
 
 _DEFAULT_BATCH_SIZE = 4096
@@ -307,6 +310,7 @@ def _persist_failed_evaluation(
     model_name: str,
     scoring_mode: Literal["sign_aware", "baseline"],
     error: Exception,
+    decoder_alignment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     evaluation_path = os.path.join(model_dir, "evaluation.json")
     evaluation = {
@@ -315,6 +319,7 @@ def _persist_failed_evaluation(
         "scoring_mode": scoring_mode,
         "metrics": None,
         "per_channel": None,
+        "decoder_alignment": decoder_alignment,
         "error": f"{type(error).__name__}: {error}",
     }
     with open(evaluation_path, "w") as f:
@@ -335,6 +340,7 @@ def _run_single_model(
     os.makedirs(model_dir, exist_ok=True)
 
     scoring_mode = _determine_scoring_mode(model_config)
+    decoder_alignment: Optional[Dict[str, Any]] = None
     try:
         if training_output is None:
             training_output = run_training_for_variant(
@@ -348,6 +354,10 @@ def _run_single_model(
             model=model,
             training_metrics=training_output["training_metrics"],
             model_config=model_config,
+            model_dir=model_dir,
+        )
+        decoder_alignment = persist_decoder_alignment_diagnostics(
+            model=model,
             model_dir=model_dir,
         )
 
@@ -374,6 +384,7 @@ def _run_single_model(
             pooling=experiment_config.scoring.pooling,
             topk_k=experiment_config.scoring.topk_k,
             target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
+            decoder_alignment=decoder_alignment,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
         )
@@ -387,6 +398,7 @@ def _run_single_model(
             model_name=model_config.name,
             scoring_mode=scoring_mode,
             error=exc,
+            decoder_alignment=decoder_alignment,
         )
 
 
@@ -516,6 +528,12 @@ def _aggregate_seed_sweep(
         "fpr_low",
         "covered_channels_fraction",
         "covered_channels_count",
+        "unique_channels_claimed",
+        "purity_mean",
+        "purity_median",
+        "purity_p10",
+        "purity_p50",
+        "purity_p90",
     )
     per_model_values: Dict[str, Dict[str, List[float]]] = defaultdict(
         lambda: defaultdict(list)
