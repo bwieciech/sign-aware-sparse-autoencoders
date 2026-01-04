@@ -38,6 +38,7 @@ from sgnsae.experiments.directional_deviation.scoring import (
     calibrate_score_thresholds,
     calibrate_sign_aware_latent_thresholds,
     calculate_baseline_directional_scores,
+    calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
@@ -171,6 +172,30 @@ def _calibrate_and_persist_thresholds(
         )
     )
 
+    pooling = experiment_config.scoring.pooling
+    topk_k = experiment_config.scoring.topk_k
+    targets: Optional[Tensor] = None
+    latent_argmax: Optional[Tensor] = None
+    if experiment_config.scoring.target_restricted_scoring:
+        channels_to_evaluate = anomaly_manifest.get("channels_to_evaluate")
+        if not isinstance(channels_to_evaluate, list) or not channels_to_evaluate:
+            raise ValueError(
+                "channels_to_evaluate must be present in anomaly_manifest when target_restricted_scoring=True."
+            )
+        channels_to_evaluate_ints = [int(value) for value in channels_to_evaluate]
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(experiment_config.data.seed + 11)
+        permutation = torch.randperm(
+            len(channels_to_evaluate_ints), generator=generator
+        )
+        shuffled = torch.tensor(channels_to_evaluate_ints, dtype=torch.int64)[
+            permutation
+        ]
+        targets = shuffled[
+            torch.arange(int(x_val.shape[0]), dtype=torch.int64) % shuffled.shape[0]
+        ]
+        latent_argmax = calculate_latent_argmax_channel(model).to("cpu")
+
     if scoring_mode == "sign_aware":
         pi_val = _extract_validation_signal_cpu(
             model=model,
@@ -186,6 +211,10 @@ def _calibrate_and_persist_thresholds(
         score_high_val, score_low_val = calculate_sign_aware_directional_scores(
             pi=pi_val,
             latent_thresholds=latent_thresholds_cpu,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax,
         )
         score_thresholds = calibrate_score_thresholds(
             score_high_validation=score_high_val,
@@ -198,6 +227,9 @@ def _calibrate_and_persist_thresholds(
             scoring_mode=scoring_mode,
             latent_quantile=latent_quantile,
             score_thresholds=score_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
             shift_mode=baseline_shift_mode,
             subset_indices=subset_indices,
         )
@@ -233,6 +265,10 @@ def _calibrate_and_persist_thresholds(
     score_high_val, score_low_val = calculate_baseline_directional_scores(
         one_sided_evidence=evidence_val,
         baseline_thresholds=baseline_thresholds_cpu,
+        pooling=pooling,
+        topk_k=topk_k,
+        targets=targets,
+        latent_argmax_channel=latent_argmax,
     )
     score_thresholds = calibrate_score_thresholds(
         score_high_validation=score_high_val,
@@ -245,6 +281,9 @@ def _calibrate_and_persist_thresholds(
         scoring_mode=scoring_mode,
         latent_quantile=latent_quantile,
         score_thresholds=score_thresholds,
+        pooling=pooling,
+        topk_k=topk_k,
+        target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
         shift_mode=baseline_shift_mode,
         subset_indices=subset_indices,
     )
@@ -332,6 +371,9 @@ def _run_single_model(
             score_thresholds=score_thresholds,
             evaluation_batch_size=batch_size,
             coverage_recall_target=float(experiment_config.coverage_recall_target),
+            pooling=experiment_config.scoring.pooling,
+            topk_k=experiment_config.scoring.topk_k,
+            target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
         )

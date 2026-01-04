@@ -11,11 +11,13 @@ from sgnsae.experiments.directional_deviation.data import (
     LABEL_TYPE_LOW,
     DirectionalDeviationAnomalyBatch,
 )
+from sgnsae.experiments.directional_deviation.pooling import PoolingMode
 from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
     calculate_baseline_directional_scores,
+    calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
@@ -32,6 +34,9 @@ class DirectionalDeviationEvaluationInputs:
     score_thresholds: ScoreThresholds
     evaluation_batch_size: int
     coverage_recall_target: float
+    pooling: PoolingMode = "sum"
+    topk_k: Optional[int] = None
+    target_restricted_scoring: bool = False
     latent_thresholds: Optional[SignAwareLatentThresholds] = None
     baseline_thresholds: Optional[BaselineEvidenceThresholds] = None
 
@@ -98,6 +103,10 @@ def _compute_directional_scores(
     x: Tensor,
     latent_thresholds: Optional[SignAwareLatentThresholds],
     baseline_thresholds: Optional[BaselineEvidenceThresholds],
+    pooling: PoolingMode,
+    topk_k: Optional[int],
+    targets: Optional[Tensor],
+    latent_argmax_channel: Optional[Tensor],
 ) -> Tuple[Tensor, Tensor]:
     if scoring_mode == "sign_aware":
         if latent_thresholds is None:
@@ -106,7 +115,12 @@ def _compute_directional_scores(
             )
         pi = extract_detection_signal(model, x)
         return calculate_sign_aware_directional_scores(
-            pi=pi, latent_thresholds=latent_thresholds
+            pi=pi,
+            latent_thresholds=latent_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
         )
     if scoring_mode == "baseline":
         if baseline_thresholds is None:
@@ -117,6 +131,10 @@ def _compute_directional_scores(
         return calculate_baseline_directional_scores(
             one_sided_evidence=evidence,
             baseline_thresholds=baseline_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
         )
     raise ValueError(f"Unsupported scoring_mode: {scoring_mode}.")
 
@@ -128,6 +146,11 @@ def _calculate_flag_rates_for_normal_set(
     score_thresholds: ScoreThresholds,
     latent_thresholds: Optional[SignAwareLatentThresholds],
     baseline_thresholds: Optional[BaselineEvidenceThresholds],
+    pooling: PoolingMode,
+    topk_k: Optional[int],
+    target_restricted_scoring: bool,
+    channels_to_evaluate: Optional[List[int]],
+    latent_argmax_channel: Optional[Tensor],
     batch_size: int,
 ) -> Tuple[Optional[float], Optional[float]]:
     num_normals = int(x_test_normal.shape[0])
@@ -136,13 +159,38 @@ def _calculate_flag_rates_for_normal_set(
 
     total_flagged_high = 0
     total_flagged_low = 0
+    channels_tensor: Optional[Tensor] = None
+    target_offset = 0
+    if target_restricted_scoring:
+        if channels_to_evaluate is None or not channels_to_evaluate:
+            raise ValueError(
+                "channels_to_evaluate must be provided when target_restricted_scoring=True."
+            )
+        channels_tensor = torch.tensor(channels_to_evaluate, dtype=torch.int64)
+        if latent_argmax_channel is None:
+            raise ValueError(
+                "latent_argmax_channel must be provided when target_restricted_scoring=True."
+            )
+
     for batch in _iterate_tensor_batches(x_test_normal, batch_size=batch_size):
+        targets: Optional[Tensor] = None
+        if channels_tensor is not None:
+            batch_count = int(batch.shape[0])
+            indices = (
+                torch.arange(batch_count, dtype=torch.int64) + int(target_offset)
+            ) % int(channels_tensor.shape[0])
+            targets = channels_tensor[indices].to(device=batch.device)
+            target_offset += batch_count
         score_high, score_low = _compute_directional_scores(
             model=model,
             scoring_mode=scoring_mode,
             x=batch,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
         )
         total_flagged_high += int(
             (score_high > score_thresholds.theta_high).sum().item()
@@ -159,6 +207,9 @@ def evaluate_directional_deviation(
     anomaly_data: Dict[str, Any],
     x_test_normal: Tensor,
     score_thresholds: ScoreThresholds,
+    pooling: PoolingMode = "sum",
+    topk_k: Optional[int] = None,
+    target_restricted_scoring: bool = False,
     latent_thresholds: Optional[SignAwareLatentThresholds] = None,
     baseline_thresholds: Optional[BaselineEvidenceThresholds] = None,
     evaluation_batch_size: int = 4096,
@@ -209,15 +260,33 @@ def evaluate_directional_deviation(
         total_low_by_direction = torch.zeros(num_directions, dtype=torch.int64)
         detected_low_by_direction = torch.zeros(num_directions, dtype=torch.int64)
 
+    latent_argmax: Optional[Tensor] = None
+    channels_to_evaluate: Optional[List[int]] = None
+    if target_restricted_scoring:
+        if not per_channel_enabled:
+            raise ValueError(
+                "target_restricted_scoring is only supported when shift_mode='single_channel'."
+            )
+        channels_raw = anomaly_manifest.get("channels_to_evaluate")
+        if not isinstance(channels_raw, list) or not channels_raw:
+            raise ValueError("anomaly_manifest is missing channels_to_evaluate.")
+        channels_to_evaluate = [int(value) for value in channels_raw]
+        latent_argmax = calculate_latent_argmax_channel(model)
+
     model.eval()
     with torch.no_grad():
         for batch in anomaly_batches:
+            targets = batch.labels_channel if target_restricted_scoring else None
             score_high, score_low = _compute_directional_scores(
                 model=model,
                 scoring_mode=scoring_mode,
                 x=batch.x,
                 latent_thresholds=latent_thresholds,
                 baseline_thresholds=baseline_thresholds,
+                pooling=pooling,
+                topk_k=topk_k,
+                targets=targets,
+                latent_argmax_channel=latent_argmax,
             )
             predicted_high = score_high > score_thresholds.theta_high
             predicted_low = score_low > score_thresholds.theta_low
@@ -308,6 +377,11 @@ def evaluate_directional_deviation(
         score_thresholds=score_thresholds,
         latent_thresholds=latent_thresholds,
         baseline_thresholds=baseline_thresholds,
+        pooling=pooling,
+        topk_k=topk_k,
+        target_restricted_scoring=target_restricted_scoring,
+        channels_to_evaluate=channels_to_evaluate,
+        latent_argmax_channel=latent_argmax,
         batch_size=evaluation_batch_size,
     )
 
@@ -486,6 +560,9 @@ def evaluate_and_persist_directional_deviation(
             anomaly_data=inputs.anomaly_data,
             x_test_normal=inputs.x_test_normal,
             score_thresholds=inputs.score_thresholds,
+            pooling=inputs.pooling,
+            topk_k=inputs.topk_k,
+            target_restricted_scoring=inputs.target_restricted_scoring,
             latent_thresholds=inputs.latent_thresholds,
             baseline_thresholds=inputs.baseline_thresholds,
             evaluation_batch_size=inputs.evaluation_batch_size,

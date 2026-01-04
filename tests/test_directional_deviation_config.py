@@ -122,6 +122,19 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
             with self.assertRaises(ValueError):
                 config_module.load_experiment_config(config_path)
 
+    def test_load_config_rejects_scoring_section_when_not_dict(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_base_raw_config(tmpdir)
+            raw_config["scoring"] = ["not", "a", "dict"]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                config_module.load_experiment_config(config_path)
+
     def test_load_config_requires_yaml_dependency(self) -> None:
         # given
         yaml_text = "\n".join(
@@ -382,6 +395,163 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationThresholdConfig(
                 **{**base_kwargs, "score_fpr": 1.0}
+            )
+
+    def test_scoring_config_rejects_invalid_pooling_and_topk_k(self) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(  # type: ignore[arg-type]
+                pooling="unsupported"
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(pooling="topk")
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(
+                pooling="topk", topk_k=0
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(pooling="sum", topk_k=1)
+
+    def test_experiment_config_rejects_topk_k_larger_than_model_width(self) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=5,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0, shift_mode="single_channel"
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        scoring = config_module.DirectionalDeviationScoringConfig(
+            pooling="topk", topk_k=3
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="relu_sae",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+                scoring=scoring,
+            )
+
+    def test_experiment_config_rejects_topk_k_larger_than_width_sweep(self) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=5,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0, shift_mode="single_channel"
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        scoring = config_module.DirectionalDeviationScoringConfig(
+            pooling="topk", topk_k=3
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="relu_sae",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=999,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+                scoring=scoring,
+                width_sweep=[1, 2],
+            )
+
+    def test_experiment_config_rejects_target_restricted_scoring_for_non_single_channel(
+        self,
+    ) -> None:
+        # given
+        data_config = config_module.DirectionalDeviationDataConfig(
+            seed=1,
+            num_train=2,
+            num_val=2,
+            num_test_normal=1,
+            num_test_high_per_channel=1,
+            num_test_low_per_channel=1,
+            num_channels=5,
+        )
+        anomaly_config = config_module.DirectionalDeviationAnomalyConfig(
+            delta=1.0, shift_mode="subset", subset_size=1
+        )
+        thresholds = config_module.DirectionalDeviationThresholdConfig(
+            min_validation_samples=1
+        )
+        scoring = config_module.DirectionalDeviationScoringConfig(
+            pooling="sum", target_restricted_scoring=True
+        )
+        model_config = config_module.DirectionalDeviationModelVariantConfig(
+            name="relu_sae",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationExperimentConfig(
+                output_dir="x",
+                device="cpu",
+                data=data_config,
+                anomaly=anomaly_config,
+                thresholds=thresholds,
+                models=[model_config],
+                scoring=scoring,
             )
 
     def test_experiment_config_rejects_train_anomaly_fraction_for_feature_direction(

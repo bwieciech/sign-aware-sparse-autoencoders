@@ -15,11 +15,13 @@ from sgnsae.experiments.directional_deviation.data import (
     LABEL_TYPE_HIGH,
     LABEL_TYPE_LOW,
 )
+from sgnsae.experiments.directional_deviation.pooling import PoolingMode
 from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     SignAwareLatentThresholds,
     assign_baseline_latent_directions,
     calculate_baseline_directional_scores,
+    calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
@@ -382,6 +384,7 @@ def _plot_score_histograms_grid_for_models(run_dir: str, plots_dir: str) -> None
     x_test_normal = preview.get("x_test_normal")
     x_test_anomaly = preview.get("x_test_anomaly")
     labels_type = preview.get("labels_type")
+    labels_channel = preview.get("labels_channel")
     if x_test_normal is None or x_test_anomaly is None or labels_type is None:
         return
 
@@ -436,6 +439,7 @@ def _plot_score_histograms_grid_for_models(run_dir: str, plots_dir: str) -> None
                 anomaly_manifest=anomaly_manifest,
                 thresholds_dir=thresholds_dir,
                 x=x_test_normal,
+                targets=None,
             )
             score_high_anom, score_low_anom = _compute_directional_scores(
                 model=model,
@@ -443,6 +447,7 @@ def _plot_score_histograms_grid_for_models(run_dir: str, plots_dir: str) -> None
                 anomaly_manifest=anomaly_manifest,
                 thresholds_dir=thresholds_dir,
                 x=x_test_anomaly,
+                targets=labels_channel,
             )
         except Exception:
             continue
@@ -585,6 +590,7 @@ def _plot_score_distributions_for_model(
     x_test_normal = preview.get("x_test_normal")
     x_test_anomaly = preview.get("x_test_anomaly")
     labels_type = preview.get("labels_type")
+    labels_channel = preview.get("labels_channel")
     if x_test_normal is None or x_test_anomaly is None or labels_type is None:
         return
 
@@ -594,6 +600,7 @@ def _plot_score_distributions_for_model(
         anomaly_manifest=anomaly_manifest,
         thresholds_dir=thresholds_dir,
         x=x_test_normal,
+        targets=None,
     )
     score_high_anom, score_low_anom = _compute_directional_scores(
         model=model,
@@ -601,6 +608,7 @@ def _plot_score_distributions_for_model(
         anomaly_manifest=anomaly_manifest,
         thresholds_dir=thresholds_dir,
         x=x_test_anomaly,
+        targets=labels_channel,
     )
 
     high_mask = labels_type == int(LABEL_TYPE_HIGH)
@@ -633,7 +641,48 @@ def _compute_directional_scores(
     anomaly_manifest: Dict[str, Any],
     thresholds_dir: str,
     x: Tensor,
+    targets: Optional[Tensor],
 ) -> Tuple[Tensor, Tensor]:
+    pooling: PoolingMode = "sum"
+    topk_k: Optional[int] = None
+    target_restricted_scoring = False
+
+    metadata = _load_json_if_present(
+        os.path.join(thresholds_dir, "thresholds_metadata.json")
+    )
+    if isinstance(metadata, dict):
+        scoring_config = metadata.get("scoring_config")
+        if isinstance(scoring_config, dict):
+            pooling_raw = scoring_config.get("pooling")
+            if pooling_raw in {"sum", "max", "topk"}:
+                pooling = pooling_raw
+            topk_k_raw = scoring_config.get("topk_k")
+            if isinstance(topk_k_raw, int):
+                topk_k = int(topk_k_raw)
+            target_restricted_raw = scoring_config.get("target_restricted_scoring")
+            if isinstance(target_restricted_raw, bool):
+                target_restricted_scoring = bool(target_restricted_raw)
+
+    resolved_targets: Optional[Tensor] = targets if target_restricted_scoring else None
+    latent_argmax: Optional[Tensor] = None
+    if target_restricted_scoring:
+        latent_argmax = calculate_latent_argmax_channel(model).to(device=x.device)
+        if resolved_targets is None:
+            channels_raw = anomaly_manifest.get("channels_to_evaluate")
+            if not isinstance(channels_raw, list) or not channels_raw:
+                raise ValueError(
+                    "anomaly_manifest is missing channels_to_evaluate required for target-restricted plotting."
+                )
+            channels = torch.tensor(
+                [int(value) for value in channels_raw], dtype=torch.int64
+            )
+            indices = torch.arange(int(x.shape[0]), dtype=torch.int64) % int(
+                channels.shape[0]
+            )
+            resolved_targets = channels[indices].to(device=x.device)
+        else:
+            resolved_targets = resolved_targets.to(device=x.device, dtype=torch.int64)
+
     with torch.no_grad():
         if scoring_mode == "sign_aware":
             tau_plus = _load_torch_tensor_if_present(
@@ -649,7 +698,12 @@ def _compute_directional_scores(
             )
             pi = extract_detection_signal(model, x)
             score_high, score_low = calculate_sign_aware_directional_scores(
-                pi=pi, latent_thresholds=latent_thresholds
+                pi=pi,
+                latent_thresholds=latent_thresholds,
+                pooling=pooling,
+                topk_k=topk_k,
+                targets=resolved_targets,
+                latent_argmax_channel=latent_argmax,
             )
             return score_high.detach(), score_low.detach()
 
@@ -694,7 +748,12 @@ def _compute_directional_scores(
         )
         evidence = extract_one_sided_evidence(model, x)
         score_high, score_low = calculate_baseline_directional_scores(
-            one_sided_evidence=evidence, baseline_thresholds=baseline_thresholds
+            one_sided_evidence=evidence,
+            baseline_thresholds=baseline_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=resolved_targets,
+            latent_argmax_channel=latent_argmax,
         )
         return score_high.detach(), score_low.detach()
 

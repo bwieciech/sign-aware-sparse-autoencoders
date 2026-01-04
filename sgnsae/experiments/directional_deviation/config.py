@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -321,6 +321,26 @@ class DirectionalDeviationThresholdConfig:
 
 
 @dataclass
+class DirectionalDeviationScoringConfig:
+    pooling: Literal["sum", "max", "topk"] = "sum"
+    topk_k: Optional[int] = None
+    target_restricted_scoring: bool = False
+
+    def __post_init__(self) -> None:
+        if self.pooling not in {"sum", "max", "topk"}:
+            raise ValueError(
+                "pooling must be one of 'sum', 'max', or 'topk'; "
+                f"received {self.pooling}."
+            )
+        if self.pooling == "topk":
+            if self.topk_k is None:
+                raise ValueError("topk_k must be provided when pooling='topk'.")
+            _validate_positive_int(self.topk_k, "topk_k")
+        elif self.topk_k is not None:
+            raise ValueError("topk_k must be omitted unless pooling='topk'.")
+
+
+@dataclass
 class DirectionalDeviationModelVariantConfig:
     name: str
     sae_class: str
@@ -372,6 +392,9 @@ class DirectionalDeviationExperimentConfig:
     anomaly: DirectionalDeviationAnomalyConfig
     thresholds: DirectionalDeviationThresholdConfig
     models: List[DirectionalDeviationModelVariantConfig]
+    scoring: DirectionalDeviationScoringConfig = field(
+        default_factory=DirectionalDeviationScoringConfig
+    )
     width_sweep: Optional[List[int]] = None
     run_id: Optional[str] = None
     verbose: bool = True
@@ -414,6 +437,14 @@ class DirectionalDeviationExperimentConfig:
         ):
             raise ValueError(
                 "train_anomaly_fraction must be 0.0 when shift_mode='feature_direction'."
+            )
+
+        if (
+            self.scoring.target_restricted_scoring
+            and self.anomaly.shift_mode != "single_channel"
+        ):
+            raise ValueError(
+                "target_restricted_scoring is only supported when shift_mode='single_channel'."
             )
 
         if self.anomaly.shift_mode == "subset":
@@ -466,6 +497,24 @@ class DirectionalDeviationExperimentConfig:
                         "Protocol B requires d_hidden < num_channels; received "
                         f"d_hidden={model_config.d_hidden} and num_channels={self.data.num_channels}."
                     )
+
+        if self.scoring.pooling == "topk" and self.scoring.topk_k is not None:
+            topk_k = int(self.scoring.topk_k)
+            if widths_to_validate is not None:
+                for width in widths_to_validate:
+                    if topk_k > int(width):
+                        raise ValueError(
+                            "topk_k must satisfy 1 <= topk_k <= d_hidden for all sweep widths; "
+                            f"received topk_k={topk_k} and width={width}."
+                        )
+            else:
+                for model_config in self.models:
+                    if topk_k > int(model_config.d_hidden):
+                        raise ValueError(
+                            "topk_k must satisfy 1 <= topk_k <= d_hidden for all models; "
+                            f"received topk_k={topk_k} and model "
+                            f"name='{model_config.name}' with d_hidden={model_config.d_hidden}."
+                        )
 
         if (
             self.anomaly.shift_mode == "feature_direction"
@@ -553,6 +602,12 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
     data_config = DirectionalDeviationDataConfig(**raw_config["data"])
     anomaly_config = DirectionalDeviationAnomalyConfig(**raw_config["anomaly"])
     threshold_config = DirectionalDeviationThresholdConfig(**raw_config["thresholds"])
+    raw_scoring_config = raw_config.get("scoring")
+    if raw_scoring_config is None:
+        raw_scoring_config = {}
+    if not isinstance(raw_scoring_config, dict):
+        raise ValueError("The 'scoring' section must be a dict when provided.")
+    scoring_config = DirectionalDeviationScoringConfig(**raw_scoring_config)
     model_configs = [
         DirectionalDeviationModelVariantConfig(**model_config)
         for model_config in raw_config["models"]
@@ -563,6 +618,7 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
         data=data_config,
         anomaly=anomaly_config,
         thresholds=threshold_config,
+        scoring=scoring_config,
         models=model_configs,
         width_sweep=raw_config.get("width_sweep"),
         run_id=raw_config.get("run_id"),

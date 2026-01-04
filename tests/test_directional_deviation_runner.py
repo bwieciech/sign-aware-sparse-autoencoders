@@ -14,6 +14,7 @@ from sgnsae.experiments.directional_deviation.config import (
     DirectionalDeviationDataConfig,
     DirectionalDeviationExperimentConfig,
     DirectionalDeviationModelVariantConfig,
+    DirectionalDeviationScoringConfig,
     DirectionalDeviationThresholdConfig,
 )
 
@@ -341,6 +342,104 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             self.assertTrue(
                 os.path.isfile(os.path.join(thresholds_dir, "thresholds_metadata.json"))
             )
+
+    def test_calibrate_and_persist_thresholds_target_restricted_scoring_generates_targets(
+        self,
+    ) -> None:
+        # given
+        from sgnsae.models import SAE
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            config = replace(
+                config,
+                scoring=DirectionalDeviationScoringConfig(
+                    pooling="sum", target_restricted_scoring=True
+                ),
+            )
+            model_dir = os.path.join(tmpdir, "models", "relu_sae")
+            os.makedirs(model_dir, exist_ok=True)
+            anomaly_manifest = {
+                "shift_mode": "single_channel",
+                "subset_indices": None,
+                "channels_to_evaluate": [0, 1],
+            }
+            pi_val = torch.tensor(
+                [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]], dtype=torch.float32
+            )
+            model = SAE(
+                n_instances=1,
+                d_in=2,
+                d_hidden=2,
+                resample_latents_threshold=1,
+                sign_aware=False,
+                device="cpu",
+            )
+            with torch.no_grad():
+                model.W_dec[0] = torch.tensor(
+                    [[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32
+                )
+
+            # when
+            with patch.object(
+                runner_module,
+                "_extract_validation_signal_cpu",
+                return_value=pi_val,
+            ):
+                score_thresholds, latent_thresholds, baseline_thresholds = (
+                    runner_module._calibrate_and_persist_thresholds(
+                        experiment_config=config,
+                        model=model,
+                        scoring_mode="sign_aware",
+                        anomaly_manifest=anomaly_manifest,
+                        x_val=torch.zeros((3, 2), dtype=torch.float32),
+                        model_dir=model_dir,
+                        batch_size=2,
+                    )
+                )
+
+            # then
+            self.assertIsNotNone(latent_thresholds)
+            self.assertIsNone(baseline_thresholds)
+            thresholds_dir = os.path.join(model_dir, "thresholds")
+            with open(
+                os.path.join(thresholds_dir, "thresholds_metadata.json"), "r"
+            ) as f:
+                metadata = json.load(f)
+            self.assertTrue(metadata["scoring_config"]["target_restricted_scoring"])
+            self.assertEqual(metadata["scoring_config"]["pooling"], "sum")
+            self.assertIsInstance(score_thresholds.theta_high, float)
+
+    def test_calibrate_and_persist_thresholds_target_restricted_scoring_raises_when_channels_missing(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            config = replace(
+                config,
+                scoring=DirectionalDeviationScoringConfig(
+                    pooling="sum", target_restricted_scoring=True
+                ),
+            )
+            model_dir = os.path.join(tmpdir, "models", "relu_sae")
+            os.makedirs(model_dir, exist_ok=True)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = runner_module._calibrate_and_persist_thresholds(
+                    experiment_config=config,
+                    model=torch.nn.Identity(),
+                    scoring_mode="sign_aware",
+                    anomaly_manifest={"shift_mode": "single_channel"},
+                    x_val=torch.zeros((2, 2), dtype=torch.float32),
+                    model_dir=model_dir,
+                    batch_size=2,
+                )
 
     def test_prepare_run_directory_uses_run_id_when_provided(self) -> None:
         # given

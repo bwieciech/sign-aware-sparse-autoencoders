@@ -10,6 +10,10 @@ from torch import Tensor
 from sgnsae.experiments.directional_deviation.baseline_scoring import (
     calculate_directional_scores_from_one_sided_evidence,
 )
+from sgnsae.experiments.directional_deviation.pooling import (
+    PoolingMode,
+    pool_exceedances,
+)
 from sgnsae.models import GatedSAE, SAE
 
 
@@ -220,6 +224,10 @@ def calibrate_baseline_evidence_thresholds(
 def calculate_sign_aware_directional_scores(
     pi: Tensor,
     latent_thresholds: SignAwareLatentThresholds,
+    pooling: PoolingMode = "sum",
+    topk_k: Optional[int] = None,
+    targets: Optional[Tensor] = None,
+    latent_argmax_channel: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor]:
     _validate_tensor_ndim(pi, 2, "pi")
     _validate_tensor_ndim(latent_thresholds.tau_plus, 1, "tau_plus")
@@ -234,20 +242,161 @@ def calculate_sign_aware_directional_scores(
             "Expected pi.shape[1] == tau_minus.shape[0], got "
             f"{pi.shape[1]} vs {latent_thresholds.tau_minus.shape[0]}."
         )
-    score_high = torch.relu(pi - latent_thresholds.tau_plus.unsqueeze(0)).sum(dim=1)
-    score_low = torch.relu(-pi - latent_thresholds.tau_minus.unsqueeze(0)).sum(dim=1)
+
+    exceed_high = torch.relu(pi - latent_thresholds.tau_plus.unsqueeze(0))
+    exceed_low = torch.relu(-pi - latent_thresholds.tau_minus.unsqueeze(0))
+
+    if targets is None and latent_argmax_channel is None:
+        score_high = pool_exceedances(exceed_high, pooling=pooling, topk_k=topk_k)
+        score_low = pool_exceedances(exceed_low, pooling=pooling, topk_k=topk_k)
+        return score_high, score_low
+
+    if targets is None or latent_argmax_channel is None:
+        raise ValueError(
+            "targets and latent_argmax_channel must both be provided for target-restricted scoring."
+        )
+
+    score_high = _pool_exceedances_by_target(
+        exceedances=exceed_high,
+        targets=targets,
+        latent_argmax_channel=latent_argmax_channel,
+        pooling=pooling,
+        topk_k=topk_k,
+        latent_filter_mask=None,
+    )
+    score_low = _pool_exceedances_by_target(
+        exceedances=exceed_low,
+        targets=targets,
+        latent_argmax_channel=latent_argmax_channel,
+        pooling=pooling,
+        topk_k=topk_k,
+        latent_filter_mask=None,
+    )
     return score_high, score_low
 
 
 def calculate_baseline_directional_scores(
     one_sided_evidence: Tensor,
     baseline_thresholds: BaselineEvidenceThresholds,
+    pooling: PoolingMode = "sum",
+    topk_k: Optional[int] = None,
+    targets: Optional[Tensor] = None,
+    latent_argmax_channel: Optional[Tensor] = None,
 ) -> Tuple[Tensor, Tensor]:
-    return calculate_directional_scores_from_one_sided_evidence(
-        one_sided_evidence=one_sided_evidence,
-        evidence_thresholds=baseline_thresholds.evidence_tau,
-        latent_directions=baseline_thresholds.latent_directions,
+    if targets is None and latent_argmax_channel is None:
+        return calculate_directional_scores_from_one_sided_evidence(
+            one_sided_evidence=one_sided_evidence,
+            evidence_thresholds=baseline_thresholds.evidence_tau,
+            latent_directions=baseline_thresholds.latent_directions,
+            pooling=pooling,
+            topk_k=topk_k,
+        )
+
+    if targets is None or latent_argmax_channel is None:
+        raise ValueError(
+            "targets and latent_argmax_channel must both be provided for target-restricted scoring."
+        )
+
+    evidence_excess = torch.relu(
+        one_sided_evidence - baseline_thresholds.evidence_tau.unsqueeze(0)
     )
+    directions = baseline_thresholds.latent_directions.to(device=evidence_excess.device)
+    if directions.ndim != 1:
+        raise ValueError(
+            "Expected baseline_thresholds.latent_directions.ndim == 1, got "
+            f"{directions.ndim}."
+        )
+    if evidence_excess.shape[1] != directions.shape[0]:
+        raise ValueError(
+            "Expected evidence_excess.shape[1] == latent_directions.shape[0], got "
+            f"{evidence_excess.shape[1]} vs {directions.shape[0]}."
+        )
+
+    high_mask = directions > 0
+    low_mask = directions < 0
+    score_high = _pool_exceedances_by_target(
+        exceedances=evidence_excess,
+        targets=targets,
+        latent_argmax_channel=latent_argmax_channel,
+        pooling=pooling,
+        topk_k=topk_k,
+        latent_filter_mask=high_mask,
+    )
+    score_low = _pool_exceedances_by_target(
+        exceedances=evidence_excess,
+        targets=targets,
+        latent_argmax_channel=latent_argmax_channel,
+        pooling=pooling,
+        topk_k=topk_k,
+        latent_filter_mask=low_mask,
+    )
+    return score_high, score_low
+
+
+def calculate_latent_argmax_channel(model: torch.nn.Module) -> Tensor:
+    decoder = _extract_decoder_matrix(model).detach()
+    abs_weights = decoder.abs()
+    return abs_weights.argmax(dim=0).to(dtype=torch.int64)
+
+
+def _pool_exceedances_by_target(
+    exceedances: Tensor,
+    targets: Tensor,
+    latent_argmax_channel: Tensor,
+    pooling: PoolingMode,
+    topk_k: Optional[int],
+    latent_filter_mask: Optional[Tensor],
+) -> Tensor:
+    _validate_tensor_ndim(exceedances, 2, "exceedances")
+    _validate_tensor_ndim(targets, 1, "targets")
+    _validate_tensor_ndim(latent_argmax_channel, 1, "latent_argmax_channel")
+    if exceedances.shape[0] != targets.shape[0]:
+        raise ValueError(
+            "Expected exceedances.shape[0] == targets.shape[0], got "
+            f"{exceedances.shape[0]} vs {targets.shape[0]}."
+        )
+    if exceedances.shape[1] != latent_argmax_channel.shape[0]:
+        raise ValueError(
+            "Expected exceedances.shape[1] == latent_argmax_channel.shape[0], got "
+            f"{exceedances.shape[1]} vs {latent_argmax_channel.shape[0]}."
+        )
+
+    scores = torch.zeros(
+        exceedances.shape[0],
+        dtype=exceedances.dtype,
+        device=exceedances.device,
+    )
+
+    targets_device = targets.to(device=exceedances.device, dtype=torch.int64)
+    latent_channels = latent_argmax_channel.to(
+        device=exceedances.device, dtype=torch.int64
+    )
+    latent_mask_base = (
+        torch.ones(
+            latent_channels.shape[0],
+            dtype=torch.bool,
+            device=exceedances.device,
+        )
+        if latent_filter_mask is None
+        else latent_filter_mask.to(device=exceedances.device, dtype=torch.bool)
+    )
+    if latent_mask_base.shape[0] != latent_channels.shape[0]:
+        raise ValueError(
+            "Expected latent_filter_mask to have the same length as latent_argmax_channel; "
+            f"received {latent_mask_base.shape[0]} vs {latent_channels.shape[0]}."
+        )
+
+    for target in torch.unique(targets_device):
+        sample_mask = targets_device == target
+        latent_mask = (latent_channels == target) & latent_mask_base
+        pooled = pool_exceedances(
+            exceedances=exceedances[sample_mask][:, latent_mask],
+            pooling=pooling,
+            topk_k=topk_k,
+        )
+        scores[sample_mask] = pooled
+
+    return scores
 
 
 def calibrate_score_thresholds(
@@ -286,6 +435,9 @@ def build_threshold_metadata(
     score_thresholds: ScoreThresholds,
     shift_mode: Literal["single_channel", "subset"],
     subset_indices: Optional[List[int]] = None,
+    pooling: PoolingMode = "sum",
+    topk_k: Optional[int] = None,
+    target_restricted_scoring: bool = False,
 ) -> Dict[str, Any]:
     _validate_open_unit_interval(latent_quantile, "latent_quantile")
     learned_thresholds = _extract_learned_model_thresholds(model)
@@ -299,16 +451,21 @@ def build_threshold_metadata(
             "theta_high": score_thresholds.theta_high,
             "theta_low": score_thresholds.theta_low,
         },
+        "scoring_config": {
+            "pooling": pooling,
+            "topk_k": topk_k,
+            "target_restricted_scoring": bool(target_restricted_scoring),
+        },
         "signal_definition": {
             "sign_aware": {
                 "detection_signal": "pi_gate (gated) or SAE preactivations",
-                "score_high": "sum ReLU(pi - tau_plus)",
-                "score_low": "sum ReLU(-pi - tau_minus)",
+                "score_high": f"{pooling} ReLU(pi - tau_plus)",
+                "score_low": f"{pooling} ReLU(-pi - tau_minus)",
             },
             "baseline": {
                 "evidence_signal": "non-negative latents",
-                "score_high": "sum_{dir=+1} ReLU(e - eta)",
-                "score_low": "sum_{dir=-1} ReLU(e - eta)",
+                "score_high": f"{pooling}{{dir=+1}} ReLU(e - eta)",
+                "score_low": f"{pooling}{{dir=-1}} ReLU(e - eta)",
             },
         }[scoring_mode],
         "baseline_direction_assignment": _baseline_direction_assignment_metadata(

@@ -165,18 +165,18 @@
     - Test determinism of direction selection, and verify perturbations satisfy `x_anom - x_base = ±Δ v_k` within tolerance.
     - _Requirements: R7_
 
-- [ ] 11. Add localized score pooling and optional target-restricted scoring (5C)
-  - [ ] 11.1 Add `DirectionalDeviationScoringConfig`
+- [x] 11. Add localized score pooling and optional target-restricted scoring (5C)
+  - [x] 11.1 Add `DirectionalDeviationScoringConfig`
     - Add `pooling ∈ {sum, max, topk}`, `topk_k`, and `target_restricted_scoring`.
     - Validate `1 ≤ topk_k ≤ d_hidden` when `pooling="topk"`.
     - _Requirements: R1, R4_
-  - [ ] 11.2 Implement pooling for sign-aware and baseline scoring
+  - [x] 11.2 Implement pooling for sign-aware and baseline scoring
     - Implement a shared pooling helper and apply it consistently to the per-latent exceedance tensors for `Score_high` and `Score_low`.
     - _Requirements: R4_
-  - [ ] 11.3 Implement target-restricted scoring for `shift_mode="single_channel"`
+  - [x] 11.3 Implement target-restricted scoring for `shift_mode="single_channel"`
     - Precompute `latent_argmax_channel[i] = argmax_j |D[j,i]|` and restrict scoring for channel `j` to latents mapped to `j`, define score 0 when unmapped.
     - _Requirements: R4, R5_
-  - [ ] 11.4 Add tests for pooling and target-restricted scoring
+  - [x] 11.4 Add tests for pooling and target-restricted scoring
     - Unit test `sum`, `max`, and `topk` pooling on fixed tensors, and verify restricted scoring uses only mapped latents.
     - _Requirements: R7_
 
