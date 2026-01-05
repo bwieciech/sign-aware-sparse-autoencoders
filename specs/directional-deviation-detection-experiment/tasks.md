@@ -231,11 +231,11 @@
     - Add an integration-style test that checks the reference model's π shifts by approximately ±Δ on a small fixed batch when `fixed_pi_shift` is enabled.
     - _Requirements: R7_
 
-- [ ] 16. Update configs and paper notes for the next Protocol B iteration
-  - [ ] 16.1 Add paper-run configs for 5A/5B v2
+- [x] 16. Update configs and paper notes for the next Protocol B iteration
+  - [x] 16.1 Add paper-run configs for 5A/5B v2
     - Add configs that use a narrower heteroskedastic range (e.g., `channel_stds` spanning 0.95 to 1.05) to break symmetry without dominating reconstruction.
     - Enable `signal_normalization="zscore"` and prefer localized pooling (`max` or small `topk`) for feature-direction anomalies at larger widths.
     - _Requirements: R6_
-  - [ ] 16.2 Update `main.tex` Protocol B writeup to mention 5E/5F
+  - [x] 16.2 Update `main.tex` Protocol B writeup to mention 5E/5F
     - Summarize why normalization and strength-controlled feature anomalies are the next step based on preliminary 5A/5B observations.
     - _Requirements: R6_
