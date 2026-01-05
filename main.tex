@@ -304,6 +304,16 @@ thresholds. Therefore we (a) include symmetry-breaking normal distributions and 
 (b) log decoder alignment diagnostics (per-latent channel argmax and channel-purity) to verify whether channel semantics
 are actually learned.
 
+\paragraph{Preliminary observations and next iteration.}
+In initial runs on isotropic normals, directional recall is close to the calibrated FPR and coverage is near zero, consistent
+with rotational non-identifiability. A symmetry-breaking coordinate experiment improves decoder axis alignment but can still
+yield weak detection, and we observe that latent tail thresholds can change substantially under heteroskedastic normals. This
+motivates per-latent signal normalization (z-scoring on validation normals) before thresholding and pooling (5E). For
+feature-direction anomalies, the Sign-Aware model can achieve strong recall at moderate widths, but performance can degrade
+at larger widths when anomaly strength varies across directions and pooling noise grows with $H$. This motivates
+strength-controlled feature anomalies (direction selection tied to $\pi$ statistics and optional per-direction $\Delta$
+scaling) together with localized pooling (5F).
+
 \subsection{Protocol C: Geometric Validation on Toy Models}
 This protocol replicates the setup of \cite{elhage2022toy} to provide visual and geometric confirmation that the Sign-Aware SAE correctly identifies and consolidates anticorrelated subspaces.
 

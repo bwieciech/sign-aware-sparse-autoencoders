@@ -196,3 +196,46 @@
   - [x] 13.1 Update `README.md` Protocol B reproduction steps and expected artifacts
     - Document new config fields, the new `feature_direction` mode, pooling options, and the new diagnostics artifacts and plots.
     - _Requirements: R6_
+
+- [ ] 14. Add signal normalization for scoring (5E)
+  - [ ] 14.1 Extend `DirectionalDeviationScoringConfig`
+    - Add `signal_normalization ∈ {"none","zscore"}` and `normalization_eps` with validation and defaults.
+    - _Requirements: R1, R4_
+  - [ ] 14.2 Calibrate and persist normalization stats during threshold calibration
+    - Fit per-latent (μ,σ) on validation normals for the raw detection signal used by the model.
+    - Persist the stats under `models/<model_name>/thresholds/` and include them in `thresholds_metadata.json`.
+    - _Requirements: R4, R6_
+  - [ ] 14.3 Apply normalization consistently in scoring and evaluation
+    - Ensure calibration (τ/η and θ) and all test scoring uses the normalized signal when enabled.
+    - _Requirements: R4, R6_
+  - [ ] 14.4 Add tests for signal normalization
+    - Add unit tests that verify z-score normalization on a fixed tensor and end-to-end calibration produces finite thresholds.
+    - _Requirements: R7_
+
+- [ ] 15. Add strength-controlled feature-direction anomalies (5F)
+  - [ ] 15.1 Extend `DirectionalDeviationAnomalyConfig`
+    - Extend `direction_selection` with `top_pi_std` and `top_weight_norm`.
+    - Add `direction_delta_mode ∈ {"fixed_input","fixed_pi_shift"}` and `max_direction_input_delta` (optional cap).
+    - _Requirements: R1, R3_
+  - [ ] 15.2 Implement `top_pi_std` and `top_weight_norm` direction selection
+    - For `top_pi_std`, compute per-latent std of the reference model detection signal π on `base_samples` normals and select the top `M` latents deterministically (ties by latent index).
+    - For `top_weight_norm`, select the top `M` latents by raw direction L2 norm deterministically (ties by latent index).
+    - Persist the selection stats in `anomaly_manifest.json`.
+    - _Requirements: R3, R6_
+  - [ ] 15.3 Implement per-direction Δ scaling for `direction_delta_mode="fixed_pi_shift"`
+    - Compute Δ_k = Δ / (||w_k|| + ε) for each selected direction and generate anomalies as `x' = x ± Δ_k v_k` (with optional clipping).
+    - Persist Δ_k in the anomaly manifest and support `anomaly_eval_mode="stream"`.
+    - _Requirements: R3, R6_
+  - [ ] 15.4 Add tests for feature-direction selection and delta scaling
+    - Verify determinism for `top_pi_std` selection and that anomalies satisfy the expected perturbation formula.
+    - Add an integration-style test that checks the reference model's π shifts by approximately ±Δ on a small fixed batch when `fixed_pi_shift` is enabled.
+    - _Requirements: R7_
+
+- [ ] 16. Update configs and paper notes for the next Protocol B iteration
+  - [ ] 16.1 Add paper-run configs for 5A/5B v2
+    - Add configs that use a narrower heteroskedastic range (e.g., `channel_stds` spanning 0.95 to 1.05) to break symmetry without dominating reconstruction.
+    - Enable `signal_normalization="zscore"` and prefer localized pooling (`max` or small `topk`) for feature-direction anomalies at larger widths.
+    - _Requirements: R6_
+  - [ ] 16.2 Update `main.tex` Protocol B writeup to mention 5E/5F
+    - Summarize why normalization and strength-controlled feature anomalies are the next step based on preliminary 5A/5B observations.
+    - _Requirements: R6_

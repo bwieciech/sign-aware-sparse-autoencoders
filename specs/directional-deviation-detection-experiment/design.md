@@ -12,6 +12,8 @@ first paper run:
 - **5B** Add a feature-space anomaly variant (anomalies along learned directions).
 - **5C** Add localized scoring (max/top‑k pooling) and optional target-restricted scoring for single-channel anomalies.
 - **5D** Add decoder alignment diagnostics (channel purity / axis alignment).
+- **5E** Add optional per-latent signal normalization (z-score on validation normals) before thresholding/pooling.
+- **5F** Add strength-controlled feature-direction anomalies (direction selection tied to π statistics and optional per-direction Δ scaling).
 
 The implementation should follow repository conventions used by `sgnsae.experiments.polarity_dial`:
 - dataclass configs with validation in `__post_init__`
@@ -102,9 +104,13 @@ Validation rules:
   - `direction_source: Literal["reference_model_decoder","fixed_random","per_model_decoder"]`
   - `num_directions: int` (`M`)
   - `reference_model_name: str` (default `"sign_aware_gated_sae"`)
-  - `direction_selection: Literal["top_purity","random","explicit"]`
+  - `direction_selection: Literal["top_purity","top_pi_std","top_weight_norm","random","explicit"]`
   - `direction_latent_indices: Optional[List[int]]` (required if `direction_selection="explicit"`)
   - `normalize_directions: bool = True` (normalize to unit L2 norm)
+  - `direction_delta_mode: Literal["fixed_input","fixed_pi_shift"] = "fixed_input"`
+    - `fixed_input`: anomalies are `x' = x ± Δ v_k`
+    - `fixed_pi_shift`: compute per-direction input deltas Δ_k so the reference latent has ∣Δπ∣≈Δ
+  - `max_direction_input_delta: Optional[float] = None` (optional safety cap when `fixed_pi_shift` is enabled)
   - `num_test_high_per_direction: Optional[int]`
   - `num_test_low_per_direction: Optional[int]`
   - `base_samples: Literal["test_normal","val_normal"] = "test_normal"`
@@ -118,13 +124,15 @@ Notes:
 `DirectionalDeviationScoringConfig`:
 - `pooling: Literal["sum","max","topk"] = "sum"`
 - `topk_k: Optional[int]` (required if pooling=`"topk"`)
+- `signal_normalization: Literal["none","zscore"] = "none"`
+- `normalization_eps: float = 1e-8`
 - `target_restricted_scoring: bool = False`
   - Only meaningful for `shift_mode="single_channel"` (and optionally for feature directions if desired).
   - If true, scores for a target are computed only from latents assigned to that target.
 
 #### Model variant config
 
-Keep existing fields; no changes required for 5A–5D.
+Keep existing fields; no changes required for 5A–5F.
 
 ---
 
@@ -200,12 +208,24 @@ def build_feature_directions(
 Direction extraction (`reference_model_decoder`):
 - take decoder matrix `D` of shape `(N, H)`
 - compute per-latent purity: `purity[i] = max_j |D[j,i]| / ||D[:,i]||_2`
+- if `direction_selection="top_pi_std"`, compute the reference model's detection signal π on `base_samples` normals and select the top-`M` latents by `std(π_i)` (ties broken by latent index).
+- if `direction_selection="top_weight_norm"`, select the top-`M` latents by the L2 norm of the raw decoder columns before normalization.
 - select `M` latents by:
   - `top_purity`: top-M by purity (ties broken deterministically)
+  - `top_pi_std`: top-M by std(π) on base samples (ties broken deterministically)
+  - `top_weight_norm`: top-M by ||D[:,i]||_2 before normalization (ties broken deterministically)
   - `random`: random sample without replacement (seeded)
   - `explicit`: use `direction_latent_indices`
 - directions are `v_k = D[:, latent_idx_k]`
 - if `normalize_directions`, normalize each `v_k` to unit norm
+
+Direction strength control:
+- if `direction_delta_mode="fixed_input"`, use the global Δ from config.
+- if `direction_delta_mode="fixed_pi_shift"`, compute per-direction input deltas Δ_k so the *reference* latent receives an approximately fixed first-order shift ∣Δπ∣=Δ:
+  - let `w_k` be the raw direction vector (decoder column for the selected latent),
+  - let `v_k = w_k / ||w_k||`,
+  - set `Δ_k = Δ / (||w_k|| + ε)` and generate `x' = x ± Δ_k v_k`,
+  - optionally clamp Δ_k by `max_direction_input_delta` and record any clipping in the manifest.
 
 Then generate anomalies by perturbing base samples:
 
@@ -214,6 +234,7 @@ def iter_feature_direction_anomalies(
     base_x: Tensor,
     directions: Tensor,  # (M, N) unit vectors
     delta: float,
+    direction_input_deltas: Tensor | None,
     num_high_per_direction: int,
     num_low_per_direction: int,
     ...
@@ -263,6 +284,12 @@ Rules:
 - Baseline evidence `e` MUST be non-negative (e.g., post-nonlinearity activations) to avoid two-sided leakage.
 
 #### Thresholds (unchanged conceptually)
+
+Optional signal normalization (5E):
+- extract the raw detection signal on validation normals (π for sign-aware, evidence for baselines),
+- if `signal_normalization="zscore"`, fit per-latent (μ,σ) on validation normals and transform to z-scores,
+- compute τ/η and downstream scores in the normalized space,
+- persist normalization stats alongside thresholds.
 
 - Sign-aware thresholds:
   - `tau_plus[i] = quantile_q(pi[:,i])`
@@ -363,6 +390,7 @@ Per model:
 - `models/<model_name>/model.pt`
 - `models/<model_name>/training_metrics.json`
 - `models/<model_name>/thresholds/*`
+  - include `signal_normalization.(pt|json)` when enabled
 - `models/<model_name>/evaluation.json`
 - `models/<model_name>/decoder_alignment.json`
 - `models/<model_name>/plots/*.png`
@@ -377,13 +405,17 @@ High-value unit tests:
    - determinism by seed,
    - variance sanity checks for each normal_mode.
 2. **Feature-direction anomalies**:
-   - direction selection determinism,
-   - perturbation equals `±Δ v_k` (within float tolerance).
+   - direction selection determinism (`top_purity`, `top_pi_std`, `random`),
+   - perturbation equals `±Δ v_k` for `fixed_input` (within float tolerance),
+   - perturbation equals `±Δ_k v_k` and Δ_k is recorded for `fixed_pi_shift`.
 3. **Pooling modes**:
    - `sum`, `max`, `topk` correctness on toy tensors.
-4. **Target-restricted scoring**:
+4. **Signal normalization**:
+   - z-score transform produces mean≈0 and std≈1 (within tolerance) on a fixed tensor,
+   - end-to-end threshold calibration produces finite τ/η/θ when enabled.
+5. **Target-restricted scoring**:
    - score is 0 when no latents map to a channel,
    - uses only mapped latents otherwise.
-5. **Decoder alignment diagnostics**:
+6. **Decoder alignment diagnostics**:
    - purity=1 for one-hot columns,
    - expected purity for uniform columns.
