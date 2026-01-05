@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -314,22 +315,26 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
                 "_extract_validation_signal_cpu",
                 return_value=pi_val,
             ):
-                score_thresholds, latent_thresholds, baseline_thresholds = (
-                    runner_module._calibrate_and_persist_thresholds(
-                        experiment_config=config,
-                        model=torch.nn.Identity(),
-                        scoring_mode="sign_aware",
-                        anomaly_manifest=anomaly_manifest,
-                        x_val=torch.zeros((3, 1), dtype=torch.float32),
-                        model_dir=model_dir,
-                        batch_size=2,
-                    )
+                (
+                    score_thresholds,
+                    latent_thresholds,
+                    baseline_thresholds,
+                    zscore_stats,
+                ) = runner_module._calibrate_and_persist_thresholds(
+                    experiment_config=config,
+                    model=torch.nn.Identity(),
+                    scoring_mode="sign_aware",
+                    anomaly_manifest=anomaly_manifest,
+                    x_val=torch.zeros((3, 1), dtype=torch.float32),
+                    model_dir=model_dir,
+                    batch_size=2,
                 )
 
             # then
             self.assertIsNone(baseline_thresholds)
             self.assertIsNotNone(latent_thresholds)
             self.assertEqual(latent_thresholds.tau_plus.shape[0], 2)  # type: ignore[union-attr]
+            self.assertIsNone(zscore_stats)
             self.assertIsInstance(score_thresholds.theta_high, float)
             thresholds_dir = os.path.join(model_dir, "thresholds")
             self.assertTrue(os.path.isfile(os.path.join(thresholds_dir, "tau_plus.pt")))
@@ -341,6 +346,156 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             )
             self.assertTrue(
                 os.path.isfile(os.path.join(thresholds_dir, "thresholds_metadata.json"))
+            )
+
+    def test_calibrate_and_persist_thresholds_zscore_normalization_persists_stats(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            config = replace(
+                config,
+                scoring=DirectionalDeviationScoringConfig(
+                    pooling="sum",
+                    signal_normalization="zscore",
+                    normalization_eps=1e-6,
+                ),
+            )
+            model_dir = os.path.join(tmpdir, "models", "relu_sae")
+            os.makedirs(model_dir, exist_ok=True)
+            anomaly_manifest = {"shift_mode": "single_channel", "subset_indices": None}
+            pi_val = torch.tensor(
+                [[-2.0, 1.0], [0.0, 2.0], [2.0, 3.0], [4.0, 4.0]],
+                dtype=torch.float32,
+            )
+
+            # when
+            with patch.object(
+                runner_module,
+                "_extract_validation_signal_cpu",
+                return_value=pi_val,
+            ):
+                (
+                    score_thresholds,
+                    latent_thresholds,
+                    baseline_thresholds,
+                    zscore_stats,
+                ) = runner_module._calibrate_and_persist_thresholds(
+                    experiment_config=config,
+                    model=torch.nn.Identity(),
+                    scoring_mode="sign_aware",
+                    anomaly_manifest=anomaly_manifest,
+                    x_val=torch.zeros((4, 1), dtype=torch.float32),
+                    model_dir=model_dir,
+                    batch_size=2,
+                )
+
+            # then
+            self.assertIsNotNone(latent_thresholds)
+            self.assertIsNone(baseline_thresholds)
+            self.assertIsNotNone(zscore_stats)
+            self.assertTrue(math.isfinite(score_thresholds.theta_high))
+            self.assertTrue(math.isfinite(score_thresholds.theta_low))
+            thresholds_dir = os.path.join(model_dir, "thresholds")
+            self.assertTrue(
+                os.path.isfile(os.path.join(thresholds_dir, "signal_normalization.pt"))
+            )
+            with open(
+                os.path.join(thresholds_dir, "thresholds_metadata.json"), "r"
+            ) as handle:
+                metadata = json.load(handle)
+            self.assertEqual(metadata["signal_normalization"]["mode"], "zscore")
+            self.assertEqual(
+                metadata["scoring_config"]["signal_normalization"], "zscore"
+            )
+            self.assertEqual(len(metadata["signal_normalization"]["mean"]), 2)
+            self.assertEqual(len(metadata["signal_normalization"]["std"]), 2)
+
+    def test_calibrate_and_persist_thresholds_baseline_zscore_normalization_persists_stats(
+        self,
+    ) -> None:
+        # given
+        from sgnsae.models import SAE
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="cpu", run_id="root"
+            )
+            config = replace(
+                config,
+                scoring=DirectionalDeviationScoringConfig(
+                    pooling="sum",
+                    signal_normalization="zscore",
+                    normalization_eps=1e-6,
+                ),
+            )
+            model_dir = os.path.join(tmpdir, "models", "relu_sae")
+            os.makedirs(model_dir, exist_ok=True)
+            anomaly_manifest = {"shift_mode": "single_channel", "subset_indices": None}
+            evidence_val = torch.tensor(
+                [[0.1, 1.0], [0.2, 2.0], [0.3, 3.0], [0.4, 4.0]],
+                dtype=torch.float32,
+            )
+            model = SAE(
+                n_instances=1,
+                d_in=2,
+                d_hidden=2,
+                resample_latents_threshold=1,
+                sign_aware=False,
+                device="cpu",
+            )
+            with torch.no_grad():
+                model.W_dec[0] = torch.tensor(
+                    [[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32
+                )
+
+            # when
+            with patch.object(
+                runner_module,
+                "_extract_validation_signal_cpu",
+                return_value=evidence_val,
+            ):
+                (
+                    score_thresholds,
+                    latent_thresholds,
+                    baseline_thresholds,
+                    zscore_stats,
+                ) = runner_module._calibrate_and_persist_thresholds(
+                    experiment_config=config,
+                    model=model,
+                    scoring_mode="baseline",
+                    anomaly_manifest=anomaly_manifest,
+                    x_val=torch.zeros((4, 2), dtype=torch.float32),
+                    model_dir=model_dir,
+                    batch_size=2,
+                )
+
+            # then
+            self.assertIsNone(latent_thresholds)
+            self.assertIsNotNone(baseline_thresholds)
+            self.assertIsNotNone(zscore_stats)
+            self.assertTrue(math.isfinite(score_thresholds.theta_high))
+            self.assertTrue(math.isfinite(score_thresholds.theta_low))
+            thresholds_dir = os.path.join(model_dir, "thresholds")
+            self.assertTrue(
+                os.path.isfile(os.path.join(thresholds_dir, "signal_normalization.pt"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(thresholds_dir, "latent_directions.pt"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(thresholds_dir, "evidence_tau.pt"))
+            )
+            with open(
+                os.path.join(thresholds_dir, "thresholds_metadata.json"), "r"
+            ) as handle:
+                metadata = json.load(handle)
+            self.assertEqual(metadata["signal_normalization"]["mode"], "zscore")
+            self.assertEqual(
+                metadata["scoring_config"]["signal_normalization"], "zscore"
             )
 
     def test_calibrate_and_persist_thresholds_target_restricted_scoring_generates_targets(
@@ -388,21 +543,25 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
                 "_extract_validation_signal_cpu",
                 return_value=pi_val,
             ):
-                score_thresholds, latent_thresholds, baseline_thresholds = (
-                    runner_module._calibrate_and_persist_thresholds(
-                        experiment_config=config,
-                        model=model,
-                        scoring_mode="sign_aware",
-                        anomaly_manifest=anomaly_manifest,
-                        x_val=torch.zeros((3, 2), dtype=torch.float32),
-                        model_dir=model_dir,
-                        batch_size=2,
-                    )
+                (
+                    score_thresholds,
+                    latent_thresholds,
+                    baseline_thresholds,
+                    zscore_stats,
+                ) = runner_module._calibrate_and_persist_thresholds(
+                    experiment_config=config,
+                    model=model,
+                    scoring_mode="sign_aware",
+                    anomaly_manifest=anomaly_manifest,
+                    x_val=torch.zeros((3, 2), dtype=torch.float32),
+                    model_dir=model_dir,
+                    batch_size=2,
                 )
 
             # then
             self.assertIsNotNone(latent_thresholds)
             self.assertIsNone(baseline_thresholds)
+            self.assertIsNone(zscore_stats)
             thresholds_dir = os.path.join(model_dir, "thresholds")
             with open(
                 os.path.join(thresholds_dir, "thresholds_metadata.json"), "r"
@@ -475,6 +634,38 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             with open(config_path, "r") as f:
                 persisted = json.load(f)
             self.assertIsNone(persisted["wandb_api_key"])
+
+    def test_run_directional_deviation_experiment_persists_config_and_returns_run_dir(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self._build_minimal_experiment_config(
+                output_dir=tmpdir, device="auto", run_id="test_run"
+            )
+
+            # when
+            with patch.object(
+                runner_module,
+                "load_experiment_config",
+                return_value=config,
+            ), patch.object(
+                runner_module,
+                "_resolve_device",
+                return_value="cpu",
+            ), patch.object(
+                runner_module,
+                "_run_experiment_dispatch",
+                return_value={},
+            ) as dispatch_mock:
+                run_dir = runner_module.run_directional_deviation_experiment(
+                    config_path=os.path.join(tmpdir, "config.json")
+                )
+
+            # then
+            self.assertTrue(os.path.isdir(run_dir))
+            self.assertTrue(os.path.isfile(os.path.join(run_dir, "config.json")))
+            dispatch_mock.assert_called_once()
 
     def test_run_experiment_dispatch_prefers_width_sweep(self) -> None:
         # given
@@ -849,7 +1040,7 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             ) as persist_mock, patch.object(
                 runner_module,
                 "_calibrate_and_persist_thresholds",
-                return_value=(score_thresholds, None, None),
+                return_value=(score_thresholds, None, None, None),
             ) as calibrate_mock, patch.object(
                 runner_module,
                 "evaluate_and_persist_directional_deviation",

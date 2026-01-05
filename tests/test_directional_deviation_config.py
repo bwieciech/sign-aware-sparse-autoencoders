@@ -320,6 +320,28 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 channels_to_evaluate=[0],
             )
 
+    def test_anomaly_config_rejects_non_default_base_samples_for_non_feature_direction(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                delta=1.0, shift_mode="single_channel", base_samples="val_normal"
+            )
+
+    def test_anomaly_config_rejects_invalid_base_samples_for_feature_direction(
+        self,
+    ) -> None:
+        # given
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(  # type: ignore[arg-type]
+                delta=1.0,
+                shift_mode="feature_direction",
+                base_samples="invalid",
+            )
+
     def test_anomaly_config_feature_direction_rejects_invalid_direction_source_and_selection(
         self,
     ) -> None:
@@ -403,6 +425,18 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationScoringConfig(  # type: ignore[arg-type]
                 pooling="unsupported"
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(  # type: ignore[arg-type]
+                signal_normalization="unsupported"
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(
+                signal_normalization="zscore", normalization_eps=0.0
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationScoringConfig(
+                signal_normalization="zscore", normalization_eps=float("inf")
             )
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationScoringConfig(pooling="topk")

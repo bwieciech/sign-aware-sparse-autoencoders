@@ -40,6 +40,22 @@ class ScoreThresholds:
     score_quantile: float
 
 
+@dataclass(frozen=True)
+class ZScoreNormalizationStats:
+    mean: Tensor
+    std: Tensor
+    eps: float
+    clamped_mask: Tensor
+
+    def to_device(self, device: str) -> "ZScoreNormalizationStats":
+        return ZScoreNormalizationStats(
+            mean=self.mean.to(device=device),
+            std=self.std.to(device=device),
+            eps=self.eps,
+            clamped_mask=self.clamped_mask.to(device=device),
+        )
+
+
 def _validate_tensor_ndim(tensor: Tensor, expected_ndim: int, name: str) -> None:
     if tensor.ndim != expected_ndim:
         raise ValueError(f"Expected {name}.ndim == {expected_ndim}, got {tensor.ndim}.")
@@ -140,6 +156,72 @@ def extract_one_sided_evidence(model: torch.nn.Module, x: Tensor) -> Tensor:
     if torch.any(evidence < -_EPSILON):
         raise ValueError("Expected baseline evidence to be non-negative.")
     return evidence
+
+
+def fit_zscore_normalization_stats(
+    signal: Tensor, normalization_eps: float
+) -> ZScoreNormalizationStats:
+    if not (normalization_eps > 0 and normalization_eps < float("inf")):
+        raise ValueError(
+            "normalization_eps must be finite and positive; "
+            f"received {normalization_eps}."
+        )
+    _validate_tensor_ndim(signal, 2, "signal")
+    if not torch.all(torch.isfinite(signal)).item():
+        raise ValueError("signal must contain only finite values.")
+    mean = signal.mean(dim=0)
+    std = signal.std(dim=0, unbiased=False)
+
+    eps_tensor = torch.tensor(normalization_eps, device=std.device, dtype=std.dtype)
+    clamped_mask = std < eps_tensor
+    return ZScoreNormalizationStats(
+        mean=mean,
+        std=std,
+        eps=float(normalization_eps),
+        clamped_mask=clamped_mask,
+    )
+
+
+def apply_zscore_normalization(
+    signal: Tensor, stats: ZScoreNormalizationStats
+) -> Tensor:
+    _validate_tensor_ndim(signal, 2, "signal")
+    _validate_tensor_ndim(stats.mean, 1, "mean")
+    _validate_tensor_ndim(stats.std, 1, "std")
+    _validate_tensor_ndim(stats.clamped_mask, 1, "clamped_mask")
+    if signal.shape[1] != stats.mean.shape[0]:
+        raise ValueError(
+            "Expected signal.shape[1] == stats.mean.shape[0], got "
+            f"{signal.shape[1]} vs {stats.mean.shape[0]}."
+        )
+    if signal.shape[1] != stats.std.shape[0]:
+        raise ValueError(
+            "Expected signal.shape[1] == stats.std.shape[0], got "
+            f"{signal.shape[1]} vs {stats.std.shape[0]}."
+        )
+
+    mean = stats.mean.to(device=signal.device, dtype=signal.dtype)
+    std = stats.std.to(device=signal.device, dtype=signal.dtype)
+    eps_tensor = torch.tensor(stats.eps, device=signal.device, dtype=signal.dtype)
+    denom = torch.maximum(std, eps_tensor)
+    return (signal - mean.unsqueeze(0)) / denom.unsqueeze(0)
+
+
+def build_zscore_normalization_metadata(
+    stats: ZScoreNormalizationStats,
+) -> Dict[str, Any]:
+    clamped_indices = (
+        torch.nonzero(stats.clamped_mask.to(device="cpu"), as_tuple=False)
+        .flatten()
+        .tolist()
+    )
+    return {
+        "mode": "zscore",
+        "normalization_eps": float(stats.eps),
+        "mean": stats.mean.detach().to(device="cpu").tolist(),
+        "std": stats.std.detach().to(device="cpu").tolist(),
+        "clamped_latent_indices": clamped_indices,
+    }
 
 
 def assign_baseline_latent_directions(
@@ -438,12 +520,38 @@ def build_threshold_metadata(
     pooling: PoolingMode = "sum",
     topk_k: Optional[int] = None,
     target_restricted_scoring: bool = False,
+    signal_normalization: Literal["none", "zscore"] = "none",
+    normalization_eps: float = _EPSILON,
+    signal_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> Dict[str, Any]:
     _validate_open_unit_interval(latent_quantile, "latent_quantile")
+    if signal_normalization not in {"none", "zscore"}:
+        raise ValueError(
+            "signal_normalization must be one of 'none' or 'zscore'; "
+            f"received {signal_normalization}."
+        )
+    if not (normalization_eps > 0 and normalization_eps < float("inf")):
+        raise ValueError(
+            "normalization_eps must be finite and positive; "
+            f"received {normalization_eps}."
+        )
+    if signal_normalization == "zscore" and signal_normalization_stats is None:
+        raise ValueError(
+            "signal_normalization_stats must be provided when signal_normalization='zscore'."
+        )
+    if signal_normalization == "none" and signal_normalization_stats is not None:
+        raise ValueError(
+            "signal_normalization_stats must be omitted when signal_normalization='none'."
+        )
     learned_thresholds = _extract_learned_model_thresholds(model)
     metadata: Dict[str, Any] = {
         "scoring_mode": scoring_mode,
         "learned_model_thresholds": learned_thresholds,
+        "signal_normalization": (
+            {"mode": "none"}
+            if signal_normalization == "none"
+            else build_zscore_normalization_metadata(signal_normalization_stats)
+        ),
         "calibrated_eval_thresholds": {
             "latent_quantile": latent_quantile,
             "score_fpr": score_thresholds.score_fpr,
@@ -455,6 +563,8 @@ def build_threshold_metadata(
             "pooling": pooling,
             "topk_k": topk_k,
             "target_restricted_scoring": bool(target_restricted_scoring),
+            "signal_normalization": signal_normalization,
+            "normalization_eps": float(normalization_eps),
         },
         "signal_definition": {
             "sign_aware": {
@@ -535,6 +645,7 @@ def persist_sign_aware_threshold_artifacts(
     latent_thresholds: SignAwareLatentThresholds,
     score_thresholds: ScoreThresholds,
     metadata: Dict[str, Any],
+    signal_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> None:
     os.makedirs(thresholds_dir, exist_ok=True)
     torch.save(
@@ -549,6 +660,11 @@ def persist_sign_aware_threshold_artifacts(
         thresholds_dir=thresholds_dir,
         score_thresholds=score_thresholds,
     )
+    if signal_normalization_stats is not None:
+        _persist_zscore_normalization_stats(
+            thresholds_dir=thresholds_dir,
+            stats=signal_normalization_stats,
+        )
     _persist_metadata(thresholds_dir=thresholds_dir, metadata=metadata)
 
 
@@ -557,6 +673,7 @@ def persist_baseline_threshold_artifacts(
     baseline_thresholds: BaselineEvidenceThresholds,
     score_thresholds: ScoreThresholds,
     metadata: Dict[str, Any],
+    signal_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> None:
     os.makedirs(thresholds_dir, exist_ok=True)
     torch.save(
@@ -571,7 +688,27 @@ def persist_baseline_threshold_artifacts(
         thresholds_dir=thresholds_dir,
         score_thresholds=score_thresholds,
     )
+    if signal_normalization_stats is not None:
+        _persist_zscore_normalization_stats(
+            thresholds_dir=thresholds_dir,
+            stats=signal_normalization_stats,
+        )
     _persist_metadata(thresholds_dir=thresholds_dir, metadata=metadata)
+
+
+def _persist_zscore_normalization_stats(
+    thresholds_dir: str, stats: ZScoreNormalizationStats
+) -> None:
+    torch.save(
+        {
+            "mode": "zscore",
+            "mean": stats.mean.detach().to(device="cpu"),
+            "std": stats.std.detach().to(device="cpu"),
+            "normalization_eps": float(stats.eps),
+            "clamped_mask": stats.clamped_mask.detach().to(device="cpu"),
+        },
+        os.path.join(thresholds_dir, "signal_normalization.pt"),
+    )
 
 
 def _persist_score_thresholds(

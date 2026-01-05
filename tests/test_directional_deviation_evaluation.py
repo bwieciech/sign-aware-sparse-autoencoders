@@ -22,6 +22,7 @@ from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
     calibrate_score_thresholds,
     calibrate_sign_aware_latent_thresholds,
     calculate_sign_aware_directional_scores,
@@ -1321,6 +1322,104 @@ class TestDirectionalDeviationEvaluation(unittest.TestCase):
                 summary = json.load(f)
             self.assertIn("models", summary)
             self.assertIn("model_a", summary["models"])
+
+    def test_compute_directional_scores_applies_zscore_normalization_for_sign_aware(
+        self,
+    ) -> None:
+        # given
+        from sgnsae.models import SAE
+
+        model = SAE(
+            n_instances=1,
+            d_in=2,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            device=self.device,
+        )
+        with torch.no_grad():
+            model.W_dec[0] = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+            model.b_dec[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+            model.b_enc[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+
+        latent_thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(2, dtype=torch.float32),
+            tau_minus=torch.zeros(2, dtype=torch.float32),
+        )
+        zscore_stats = ZScoreNormalizationStats(
+            mean=torch.tensor([1.0, 1.0], dtype=torch.float32),
+            std=torch.tensor([1.0, 1.0], dtype=torch.float32),
+            eps=1e-8,
+            clamped_mask=torch.zeros(2, dtype=torch.bool),
+        )
+        x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+
+        # when
+        score_high, score_low = evaluation_module._compute_directional_scores(
+            model=model,
+            scoring_mode="sign_aware",
+            x=x,
+            latent_thresholds=latent_thresholds,
+            baseline_thresholds=None,
+            pooling="sum",
+            topk_k=None,
+            targets=None,
+            latent_argmax_channel=None,
+            zscore_normalization_stats=zscore_stats,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high, torch.tensor([1.0])))
+        self.assertTrue(torch.allclose(score_low, torch.tensor([0.0])))
+
+    def test_compute_directional_scores_applies_zscore_normalization_for_baseline(
+        self,
+    ) -> None:
+        # given
+        from sgnsae.models import SAE
+
+        model = SAE(
+            n_instances=1,
+            d_in=2,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            device=self.device,
+        )
+        with torch.no_grad():
+            model.W_dec[0] = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+            model.b_dec[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+            model.b_enc[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+
+        baseline_thresholds = BaselineEvidenceThresholds(
+            evidence_tau=torch.zeros(2, dtype=torch.float32),
+            latent_directions=torch.tensor([1, -1], dtype=torch.int64),
+        )
+        zscore_stats = ZScoreNormalizationStats(
+            mean=torch.tensor([1.0, 1.0], dtype=torch.float32),
+            std=torch.tensor([1.0, 1.0], dtype=torch.float32),
+            eps=1e-8,
+            clamped_mask=torch.zeros(2, dtype=torch.bool),
+        )
+        x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+
+        # when
+        score_high, score_low = evaluation_module._compute_directional_scores(
+            model=model,
+            scoring_mode="baseline",
+            x=x,
+            latent_thresholds=None,
+            baseline_thresholds=baseline_thresholds,
+            pooling="sum",
+            topk_k=None,
+            targets=None,
+            latent_argmax_channel=None,
+            zscore_normalization_stats=zscore_stats,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high, torch.tensor([0.0])))
+        self.assertTrue(torch.allclose(score_low, torch.tensor([1.0])))
 
 
 if __name__ == "__main__":  # pragma: no cover

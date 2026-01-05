@@ -32,6 +32,8 @@ from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     assign_baseline_latent_directions,
     build_threshold_metadata,
     calibrate_baseline_evidence_thresholds,
@@ -42,6 +44,7 @@ from sgnsae.experiments.directional_deviation.scoring import (
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
+    fit_zscore_normalization_stats,
     persist_baseline_threshold_artifacts,
     persist_sign_aware_threshold_artifacts,
 )
@@ -150,6 +153,7 @@ def _calibrate_and_persist_thresholds(
     ScoreThresholds,
     Optional[SignAwareLatentThresholds],
     Optional[BaselineEvidenceThresholds],
+    Optional[ZScoreNormalizationStats],
 ]:
     thresholds_dir = os.path.join(model_dir, "thresholds")
     latent_quantile = float(experiment_config.thresholds.latent_quantile)
@@ -199,6 +203,10 @@ def _calibrate_and_persist_thresholds(
         ]
         latent_argmax = calculate_latent_argmax_channel(model).to("cpu")
 
+    signal_normalization = experiment_config.scoring.signal_normalization
+    normalization_eps = float(experiment_config.scoring.normalization_eps)
+    zscore_stats_cpu: Optional[ZScoreNormalizationStats] = None
+
     if scoring_mode == "sign_aware":
         pi_val = _extract_validation_signal_cpu(
             model=model,
@@ -206,6 +214,12 @@ def _calibrate_and_persist_thresholds(
             x_val=x_val,
             batch_size=batch_size,
         )
+        if signal_normalization == "zscore":
+            zscore_stats_cpu = fit_zscore_normalization_stats(
+                signal=pi_val,
+                normalization_eps=normalization_eps,
+            )
+            pi_val = apply_zscore_normalization(pi_val, stats=zscore_stats_cpu)
         latent_thresholds_cpu = calibrate_sign_aware_latent_thresholds(
             pi_validation=pi_val,
             latent_quantile=latent_quantile,
@@ -235,18 +249,27 @@ def _calibrate_and_persist_thresholds(
             target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
             shift_mode=baseline_shift_mode,
             subset_indices=subset_indices,
+            signal_normalization=signal_normalization,
+            normalization_eps=normalization_eps,
+            signal_normalization_stats=zscore_stats_cpu,
         )
         persist_sign_aware_threshold_artifacts(
             thresholds_dir=thresholds_dir,
             latent_thresholds=latent_thresholds_cpu,
             score_thresholds=score_thresholds,
             metadata=metadata,
+            signal_normalization_stats=zscore_stats_cpu,
         )
         latent_thresholds = SignAwareLatentThresholds(
             tau_plus=latent_thresholds_cpu.tau_plus.to(device=x_val.device),
             tau_minus=latent_thresholds_cpu.tau_minus.to(device=x_val.device),
         )
-        return score_thresholds, latent_thresholds, None
+        zscore_stats = (
+            None
+            if zscore_stats_cpu is None
+            else zscore_stats_cpu.to_device(x_val.device)
+        )
+        return score_thresholds, latent_thresholds, None, zscore_stats
 
     evidence_val = _extract_validation_signal_cpu(
         model=model,
@@ -254,6 +277,12 @@ def _calibrate_and_persist_thresholds(
         x_val=x_val,
         batch_size=batch_size,
     )
+    if signal_normalization == "zscore":
+        zscore_stats_cpu = fit_zscore_normalization_stats(
+            signal=evidence_val,
+            normalization_eps=normalization_eps,
+        )
+        evidence_val = apply_zscore_normalization(evidence_val, stats=zscore_stats_cpu)
     latent_directions = assign_baseline_latent_directions(
         model=model,
         shift_mode=baseline_shift_mode,
@@ -289,12 +318,16 @@ def _calibrate_and_persist_thresholds(
         target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
         shift_mode=baseline_shift_mode,
         subset_indices=subset_indices,
+        signal_normalization=signal_normalization,
+        normalization_eps=normalization_eps,
+        signal_normalization_stats=zscore_stats_cpu,
     )
     persist_baseline_threshold_artifacts(
         thresholds_dir=thresholds_dir,
         baseline_thresholds=baseline_thresholds_cpu,
         score_thresholds=score_thresholds,
         metadata=metadata,
+        signal_normalization_stats=zscore_stats_cpu,
     )
     baseline_thresholds = BaselineEvidenceThresholds(
         evidence_tau=baseline_thresholds_cpu.evidence_tau.to(device=x_val.device),
@@ -302,7 +335,10 @@ def _calibrate_and_persist_thresholds(
             device=x_val.device
         ),
     )
-    return score_thresholds, None, baseline_thresholds
+    zscore_stats = (
+        None if zscore_stats_cpu is None else zscore_stats_cpu.to_device(x_val.device)
+    )
+    return score_thresholds, None, baseline_thresholds, zscore_stats
 
 
 def _persist_failed_evaluation(
@@ -361,7 +397,7 @@ def _run_single_model(
             model_dir=model_dir,
         )
 
-        score_thresholds, latent_thresholds, baseline_thresholds = (
+        score_thresholds, latent_thresholds, baseline_thresholds, zscore_stats = (
             _calibrate_and_persist_thresholds(
                 experiment_config=experiment_config,
                 model=model,
@@ -387,6 +423,7 @@ def _run_single_model(
             decoder_alignment=decoder_alignment,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
+            zscore_normalization_stats=zscore_stats,
         )
         return evaluate_and_persist_directional_deviation(
             model_dir=model_dir,

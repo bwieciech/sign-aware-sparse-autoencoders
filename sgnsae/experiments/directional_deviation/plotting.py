@@ -19,6 +19,8 @@ from sgnsae.experiments.directional_deviation.pooling import PoolingMode
 from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     assign_baseline_latent_directions,
     calculate_baseline_directional_scores,
     calculate_latent_argmax_channel,
@@ -709,6 +711,7 @@ def _compute_directional_scores(
     pooling: PoolingMode = "sum"
     topk_k: Optional[int] = None
     target_restricted_scoring = False
+    zscore_stats: Optional[ZScoreNormalizationStats] = None
 
     metadata = _load_json_if_present(
         os.path.join(thresholds_dir, "thresholds_metadata.json")
@@ -725,6 +728,54 @@ def _compute_directional_scores(
             target_restricted_raw = scoring_config.get("target_restricted_scoring")
             if isinstance(target_restricted_raw, bool):
                 target_restricted_scoring = bool(target_restricted_raw)
+
+        signal_normalization = metadata.get("signal_normalization")
+        if isinstance(signal_normalization, dict):
+            normalization_mode = signal_normalization.get("mode")
+            if normalization_mode == "zscore" and zscore_stats is None:
+                mean_raw = signal_normalization.get("mean")
+                std_raw = signal_normalization.get("std")
+                eps_raw = signal_normalization.get("normalization_eps")
+                if (
+                    isinstance(mean_raw, list)
+                    and isinstance(std_raw, list)
+                    and isinstance(eps_raw, (int, float))
+                ):
+                    mean_tensor = torch.tensor(mean_raw, dtype=torch.float32)
+                    std_tensor = torch.tensor(std_raw, dtype=torch.float32)
+                    eps_value = float(eps_raw)
+                    clamped_mask = std_tensor < eps_value
+                    zscore_stats = ZScoreNormalizationStats(
+                        mean=mean_tensor,
+                        std=std_tensor,
+                        eps=eps_value,
+                        clamped_mask=clamped_mask,
+                    )
+
+    normalization_payload_path = os.path.join(thresholds_dir, "signal_normalization.pt")
+    if zscore_stats is None and os.path.isfile(normalization_payload_path):
+        normalization_payload = torch.load(
+            normalization_payload_path, map_location="cpu"
+        )
+        if isinstance(normalization_payload, dict):
+            normalization_mode = normalization_payload.get("mode")
+            if normalization_mode == "zscore":
+                mean_tensor = normalization_payload.get("mean")
+                std_tensor = normalization_payload.get("std")
+                clamped_mask = normalization_payload.get("clamped_mask")
+                eps_value = normalization_payload.get("normalization_eps")
+                if (
+                    isinstance(mean_tensor, Tensor)
+                    and isinstance(std_tensor, Tensor)
+                    and isinstance(clamped_mask, Tensor)
+                    and isinstance(eps_value, (int, float))
+                ):
+                    zscore_stats = ZScoreNormalizationStats(
+                        mean=mean_tensor,
+                        std=std_tensor,
+                        eps=float(eps_value),
+                        clamped_mask=clamped_mask.to(dtype=torch.bool),
+                    )
 
     resolved_targets: Optional[Tensor] = targets if target_restricted_scoring else None
     latent_argmax: Optional[Tensor] = None
@@ -760,6 +811,8 @@ def _compute_directional_scores(
                 tau_plus=tau_plus, tau_minus=tau_minus
             )
             pi = extract_detection_signal(model, x)
+            if zscore_stats is not None:
+                pi = apply_zscore_normalization(pi, stats=zscore_stats)
             score_high, score_low = calculate_sign_aware_directional_scores(
                 pi=pi,
                 latent_thresholds=latent_thresholds,
@@ -810,6 +863,8 @@ def _compute_directional_scores(
             latent_directions=latent_directions,
         )
         evidence = extract_one_sided_evidence(model, x)
+        if zscore_stats is not None:
+            evidence = apply_zscore_normalization(evidence, stats=zscore_stats)
         score_high, score_low = calculate_baseline_directional_scores(
             one_sided_evidence=evidence,
             baseline_thresholds=baseline_thresholds,

@@ -16,6 +16,8 @@ from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     calculate_baseline_directional_scores,
     calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
@@ -40,6 +42,7 @@ class DirectionalDeviationEvaluationInputs:
     decoder_alignment: Optional[Dict[str, Any]] = None
     latent_thresholds: Optional[SignAwareLatentThresholds] = None
     baseline_thresholds: Optional[BaselineEvidenceThresholds] = None
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None
 
 
 def _validate_probability(value: float, name: str) -> None:
@@ -108,6 +111,7 @@ def _compute_directional_scores(
     topk_k: Optional[int],
     targets: Optional[Tensor],
     latent_argmax_channel: Optional[Tensor],
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> Tuple[Tensor, Tensor]:
     if scoring_mode == "sign_aware":
         if latent_thresholds is None:
@@ -115,6 +119,8 @@ def _compute_directional_scores(
                 "latent_thresholds must be provided for sign_aware scoring."
             )
         pi = extract_detection_signal(model, x)
+        if zscore_normalization_stats is not None:
+            pi = apply_zscore_normalization(pi, stats=zscore_normalization_stats)
         return calculate_sign_aware_directional_scores(
             pi=pi,
             latent_thresholds=latent_thresholds,
@@ -129,6 +135,10 @@ def _compute_directional_scores(
                 "baseline_thresholds must be provided for baseline scoring."
             )
         evidence = extract_one_sided_evidence(model, x)
+        if zscore_normalization_stats is not None:
+            evidence = apply_zscore_normalization(
+                evidence, stats=zscore_normalization_stats
+            )
         return calculate_baseline_directional_scores(
             one_sided_evidence=evidence,
             baseline_thresholds=baseline_thresholds,
@@ -153,6 +163,7 @@ def _calculate_flag_rates_for_normal_set(
     channels_to_evaluate: Optional[List[int]],
     latent_argmax_channel: Optional[Tensor],
     batch_size: int,
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> Tuple[Optional[float], Optional[float]]:
     num_normals = int(x_test_normal.shape[0])
     if num_normals == 0:
@@ -188,6 +199,7 @@ def _calculate_flag_rates_for_normal_set(
             x=batch,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
+            zscore_normalization_stats=zscore_normalization_stats,
             pooling=pooling,
             topk_k=topk_k,
             targets=targets,
@@ -208,6 +220,7 @@ def evaluate_directional_deviation(
     anomaly_data: Dict[str, Any],
     x_test_normal: Tensor,
     score_thresholds: ScoreThresholds,
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None,
     pooling: PoolingMode = "sum",
     topk_k: Optional[int] = None,
     target_restricted_scoring: bool = False,
@@ -284,6 +297,7 @@ def evaluate_directional_deviation(
                 x=batch.x,
                 latent_thresholds=latent_thresholds,
                 baseline_thresholds=baseline_thresholds,
+                zscore_normalization_stats=zscore_normalization_stats,
                 pooling=pooling,
                 topk_k=topk_k,
                 targets=targets,
@@ -378,6 +392,7 @@ def evaluate_directional_deviation(
         score_thresholds=score_thresholds,
         latent_thresholds=latent_thresholds,
         baseline_thresholds=baseline_thresholds,
+        zscore_normalization_stats=zscore_normalization_stats,
         pooling=pooling,
         topk_k=topk_k,
         target_restricted_scoring=target_restricted_scoring,
@@ -561,6 +576,7 @@ def evaluate_and_persist_directional_deviation(
             anomaly_data=inputs.anomaly_data,
             x_test_normal=inputs.x_test_normal,
             score_thresholds=inputs.score_thresholds,
+            zscore_normalization_stats=inputs.zscore_normalization_stats,
             pooling=inputs.pooling,
             topk_k=inputs.topk_k,
             target_restricted_scoring=inputs.target_restricted_scoring,

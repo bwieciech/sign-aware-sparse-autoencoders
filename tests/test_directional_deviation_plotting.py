@@ -814,6 +814,114 @@ class TestDirectionalDeviationPlotting(unittest.TestCase):
             self.assertTrue(torch.allclose(score_high, torch.tensor([2.0])))
             self.assertTrue(torch.allclose(score_low, torch.tensor([0.0])))
 
+    def test_compute_directional_scores_sign_aware_applies_zscore_normalization_from_metadata(
+        self,
+    ) -> None:
+        # given
+        model = SAE(
+            n_instances=1,
+            d_in=2,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            device="cpu",
+        )
+        with torch.no_grad():
+            model.W_dec[0] = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+            model.b_dec[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+            model.b_enc[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            torch.save(
+                torch.zeros(2, dtype=torch.float32), os.path.join(tmpdir, "tau_plus.pt")
+            )
+            torch.save(
+                torch.zeros(2, dtype=torch.float32),
+                os.path.join(tmpdir, "tau_minus.pt"),
+            )
+            with open(os.path.join(tmpdir, "thresholds_metadata.json"), "w") as handle:
+                json.dump(
+                    {
+                        "signal_normalization": {
+                            "mode": "zscore",
+                            "normalization_eps": 1e-6,
+                            "mean": [1.0, 1.0],
+                            "std": [1.0, 1.0],
+                        }
+                    },
+                    handle,
+                )
+
+            x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+
+            # when
+            score_high, score_low = _compute_directional_scores(
+                model=model,
+                scoring_mode="sign_aware",
+                anomaly_manifest={},
+                thresholds_dir=tmpdir,
+                x=x,
+                targets=None,
+            )
+
+            # then
+            self.assertTrue(torch.allclose(score_high, torch.tensor([1.0])))
+            self.assertTrue(torch.allclose(score_low, torch.tensor([0.0])))
+
+    def test_compute_directional_scores_sign_aware_applies_zscore_normalization_from_file(
+        self,
+    ) -> None:
+        # given
+        model = SAE(
+            n_instances=1,
+            d_in=2,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            device="cpu",
+        )
+        with torch.no_grad():
+            model.W_dec[0] = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+            model.b_dec[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+            model.b_enc[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            torch.save(
+                torch.zeros(2, dtype=torch.float32), os.path.join(tmpdir, "tau_plus.pt")
+            )
+            torch.save(
+                torch.zeros(2, dtype=torch.float32),
+                os.path.join(tmpdir, "tau_minus.pt"),
+            )
+            with open(os.path.join(tmpdir, "thresholds_metadata.json"), "w") as handle:
+                json.dump({}, handle)
+            torch.save(
+                {
+                    "mode": "zscore",
+                    "mean": torch.tensor([1.0, 1.0], dtype=torch.float32),
+                    "std": torch.tensor([1.0, 1.0], dtype=torch.float32),
+                    "normalization_eps": 1e-6,
+                    "clamped_mask": torch.tensor([False, False]),
+                },
+                os.path.join(tmpdir, "signal_normalization.pt"),
+            )
+
+            x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+
+            # when
+            score_high, score_low = _compute_directional_scores(
+                model=model,
+                scoring_mode="sign_aware",
+                anomaly_manifest={},
+                thresholds_dir=tmpdir,
+                x=x,
+                targets=None,
+            )
+
+            # then
+            self.assertTrue(torch.allclose(score_high, torch.tensor([1.0])))
+            self.assertTrue(torch.allclose(score_low, torch.tensor([0.0])))
+
     def test_compute_directional_scores_sign_aware_target_restricted_scoring_generates_targets_when_missing(
         self,
     ) -> None:
@@ -969,6 +1077,60 @@ class TestDirectionalDeviationPlotting(unittest.TestCase):
             # then
             self.assertEqual(tuple(score_high.shape), (1,))
             self.assertEqual(tuple(score_low.shape), (1,))
+
+    def test_compute_directional_scores_baseline_applies_zscore_normalization_from_metadata(
+        self,
+    ) -> None:
+        # given
+        model = SAE(
+            n_instances=1,
+            d_in=2,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            device="cpu",
+        )
+        with torch.no_grad():
+            model.W_dec[0] = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+            model.b_dec[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+            model.b_enc[0] = torch.tensor([0.0, 0.0], dtype=torch.float32)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            torch.save(
+                torch.zeros(2, dtype=torch.float32),
+                os.path.join(tmpdir, "evidence_tau.pt"),
+            )
+            torch.save(
+                torch.tensor([1, -1], dtype=torch.int64),
+                os.path.join(tmpdir, "latent_directions.pt"),
+            )
+            with open(os.path.join(tmpdir, "thresholds_metadata.json"), "w") as handle:
+                json.dump(
+                    {
+                        "signal_normalization": {
+                            "mode": "zscore",
+                            "normalization_eps": 1e-6,
+                            "mean": [1.0, 1.0],
+                            "std": [1.0, 1.0],
+                        }
+                    },
+                    handle,
+                )
+            x = torch.tensor([[1.0, 2.0]], dtype=torch.float32)
+
+            # when
+            score_high, score_low = _compute_directional_scores(
+                model=model,
+                scoring_mode="baseline",
+                anomaly_manifest={"shift_mode": "single_channel"},
+                thresholds_dir=tmpdir,
+                x=x,
+                targets=None,
+            )
+
+            # then
+            self.assertTrue(torch.allclose(score_high, torch.tensor([0.0])))
+            self.assertTrue(torch.allclose(score_low, torch.tensor([1.0])))
 
     def test_compute_directional_scores_baseline_raises_when_latent_directions_wrong_dim(
         self,

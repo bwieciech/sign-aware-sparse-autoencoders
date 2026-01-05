@@ -197,18 +197,18 @@
     - Document new config fields, the new `feature_direction` mode, pooling options, and the new diagnostics artifacts and plots.
     - _Requirements: R6_
 
-- [ ] 14. Add signal normalization for scoring (5E)
-  - [ ] 14.1 Extend `DirectionalDeviationScoringConfig`
+- [x] 14. Add signal normalization for scoring (5E)
+  - [x] 14.1 Extend `DirectionalDeviationScoringConfig`
     - Add `signal_normalization ∈ {"none","zscore"}` and `normalization_eps` with validation and defaults.
     - _Requirements: R1, R4_
-  - [ ] 14.2 Calibrate and persist normalization stats during threshold calibration
+  - [x] 14.2 Calibrate and persist normalization stats during threshold calibration
     - Fit per-latent (μ,σ) on validation normals for the raw detection signal used by the model.
     - Persist the stats under `models/<model_name>/thresholds/` and include them in `thresholds_metadata.json`.
     - _Requirements: R4, R6_
-  - [ ] 14.3 Apply normalization consistently in scoring and evaluation
+  - [x] 14.3 Apply normalization consistently in scoring and evaluation
     - Ensure calibration (τ/η and θ) and all test scoring uses the normalized signal when enabled.
     - _Requirements: R4, R6_
-  - [ ] 14.4 Add tests for signal normalization
+  - [x] 14.4 Add tests for signal normalization
     - Add unit tests that verify z-score normalization on a fixed tensor and end-to-end calibration produces finite thresholds.
     - _Requirements: R7_
 

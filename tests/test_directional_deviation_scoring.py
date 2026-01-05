@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -11,8 +12,11 @@ from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     calculate_latent_argmax_channel,
     assign_baseline_latent_directions,
+    build_zscore_normalization_metadata,
     build_threshold_metadata,
     calibrate_baseline_evidence_thresholds,
     calibrate_score_thresholds,
@@ -21,6 +25,7 @@ from sgnsae.experiments.directional_deviation.scoring import (
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
+    fit_zscore_normalization_stats,
     persist_baseline_threshold_artifacts,
     persist_sign_aware_threshold_artifacts,
 )
@@ -498,6 +503,248 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
             torch.allclose(thresholds.evidence_tau, torch.tensor([2.0, 3.0]), atol=1e-7)
         )
         self.assertTrue(torch.equal(thresholds.latent_directions, latent_directions))
+
+    def test_zscore_normalization_produces_zero_mean_and_unit_std_per_latent(
+        self,
+    ) -> None:
+        # given
+        signal = torch.tensor(
+            [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0], [6.0, 7.0]],
+            dtype=torch.float32,
+        )
+
+        # when
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+        normalized = apply_zscore_normalization(signal, stats=stats)
+
+        # then
+        mean = normalized.mean(dim=0)
+        std = normalized.std(dim=0, unbiased=False)
+        self.assertTrue(
+            torch.allclose(mean, torch.zeros(2, dtype=torch.float32), atol=1e-6)
+        )
+        self.assertTrue(
+            torch.allclose(std, torch.ones(2, dtype=torch.float32), atol=1e-6)
+        )
+        self.assertTrue(
+            torch.equal(stats.clamped_mask, torch.zeros(2, dtype=torch.bool))
+        )
+
+    def test_fit_zscore_normalization_stats_raises_for_invalid_eps(self) -> None:
+        # given
+        signal = torch.zeros((2, 2), dtype=torch.float32)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = fit_zscore_normalization_stats(signal=signal, normalization_eps=0.0)
+
+    def test_fit_zscore_normalization_stats_raises_for_non_finite_mean(self) -> None:
+        # given
+        signal = torch.tensor(
+            [[float("nan"), 0.0], [0.0, 1.0]],
+            dtype=torch.float32,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+
+    def test_fit_zscore_normalization_stats_raises_for_non_finite_signal(self) -> None:
+        # given
+        signal = torch.tensor(
+            [[0.0, float("inf")], [1.0, 2.0]],
+            dtype=torch.float32,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+
+    def test_apply_zscore_normalization_raises_for_shape_mismatch(self) -> None:
+        # given
+        signal = torch.zeros((2, 2), dtype=torch.float32)
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+        invalid_signal = torch.zeros((2, 3), dtype=torch.float32)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = apply_zscore_normalization(invalid_signal, stats=stats)
+
+    def test_apply_zscore_normalization_raises_for_std_shape_mismatch(self) -> None:
+        # given
+        signal = torch.zeros((2, 3), dtype=torch.float32)
+        stats = ZScoreNormalizationStats(
+            mean=torch.zeros(3, dtype=torch.float32),
+            std=torch.zeros(2, dtype=torch.float32),
+            eps=1e-8,
+            clamped_mask=torch.zeros(2, dtype=torch.bool),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = apply_zscore_normalization(signal, stats=stats)
+
+    def test_build_zscore_normalization_metadata_records_clamped_latents(
+        self,
+    ) -> None:
+        # given
+        signal = torch.tensor(
+            [[1.0, 0.0], [1.0, 2.0], [1.0, 4.0]],
+            dtype=torch.float32,
+        )
+
+        # when
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=0.5)
+        metadata = build_zscore_normalization_metadata(stats)
+
+        # then
+        self.assertEqual(metadata["mode"], "zscore")
+        self.assertEqual(metadata["normalization_eps"], 0.5)
+        self.assertEqual(metadata["clamped_latent_indices"], [0])
+
+    def test_build_threshold_metadata_rejects_missing_or_unexpected_zscore_stats(
+        self,
+    ) -> None:
+        # given
+        model = self._make_sae(sign_aware=False, single_activation_offset=False)
+        score_thresholds = ScoreThresholds(
+            theta_high=1.0,
+            theta_low=2.0,
+            score_fpr=0.01,
+            score_quantile=0.99,
+        )
+        signal = torch.randn((4, 2))
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="zscore",
+                signal_normalization_stats=None,
+            )
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="none",
+                signal_normalization_stats=stats,
+            )
+
+    def test_build_threshold_metadata_rejects_invalid_signal_normalization_and_eps(
+        self,
+    ) -> None:
+        # given
+        model = self._make_sae(sign_aware=False, single_activation_offset=False)
+        score_thresholds = ScoreThresholds(
+            theta_high=1.0,
+            theta_low=2.0,
+            score_fpr=0.01,
+            score_quantile=0.99,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(  # type: ignore[arg-type]
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="invalid",
+            )
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="none",
+                normalization_eps=0.0,
+            )
+
+    def test_zscore_normalization_enables_end_to_end_sign_aware_calibration(
+        self,
+    ) -> None:
+        # given
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(0)
+        pi_val_raw = torch.randn((200, 4), generator=generator) * 2.0 + 3.0
+
+        # when
+        stats = fit_zscore_normalization_stats(
+            signal=pi_val_raw, normalization_eps=1e-6
+        )
+        pi_val = apply_zscore_normalization(pi_val_raw, stats=stats)
+        latent_thresholds = calibrate_sign_aware_latent_thresholds(
+            pi_validation=pi_val,
+            latent_quantile=0.99,
+            min_validation_samples=10,
+        )
+        score_high_val, score_low_val = calculate_sign_aware_directional_scores(
+            pi=pi_val,
+            latent_thresholds=latent_thresholds,
+            pooling="sum",
+        )
+        score_thresholds = calibrate_score_thresholds(
+            score_high_validation=score_high_val,
+            score_low_validation=score_low_val,
+            score_fpr=0.05,
+            min_validation_samples=10,
+        )
+
+        # then
+        self.assertTrue(torch.all(torch.isfinite(latent_thresholds.tau_plus)).item())
+        self.assertTrue(torch.all(torch.isfinite(latent_thresholds.tau_minus)).item())
+        self.assertTrue(math.isfinite(score_thresholds.theta_high))
+        self.assertTrue(math.isfinite(score_thresholds.theta_low))
+
+    def test_zscore_normalization_enables_end_to_end_baseline_calibration(
+        self,
+    ) -> None:
+        # given
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(1)
+        evidence_val_raw = torch.relu(torch.randn((200, 4), generator=generator) + 0.5)
+        latent_directions = torch.tensor([1, -1, 1, -1], dtype=torch.int64)
+
+        # when
+        stats = fit_zscore_normalization_stats(
+            signal=evidence_val_raw, normalization_eps=1e-6
+        )
+        evidence_val = apply_zscore_normalization(evidence_val_raw, stats=stats)
+        baseline_thresholds = calibrate_baseline_evidence_thresholds(
+            evidence_validation=evidence_val,
+            latent_directions=latent_directions,
+            latent_quantile=0.99,
+            min_validation_samples=10,
+        )
+        score_high_val, score_low_val = calculate_baseline_directional_scores(
+            one_sided_evidence=evidence_val,
+            baseline_thresholds=baseline_thresholds,
+            pooling="sum",
+        )
+        score_thresholds = calibrate_score_thresholds(
+            score_high_validation=score_high_val,
+            score_low_validation=score_low_val,
+            score_fpr=0.05,
+            min_validation_samples=10,
+        )
+
+        # then
+        self.assertTrue(
+            torch.all(torch.isfinite(baseline_thresholds.evidence_tau)).item()
+        )
+        self.assertTrue(math.isfinite(score_thresholds.theta_high))
+        self.assertTrue(math.isfinite(score_thresholds.theta_low))
 
     def test_calibrate_baseline_evidence_thresholds_raises_for_direction_length_mismatch(
         self,

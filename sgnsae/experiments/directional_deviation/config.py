@@ -339,6 +339,8 @@ class DirectionalDeviationThresholdConfig:
 class DirectionalDeviationScoringConfig:
     pooling: Literal["sum", "max", "topk"] = "sum"
     topk_k: Optional[int] = None
+    signal_normalization: Literal["none", "zscore"] = "none"
+    normalization_eps: float = 1e-8
     target_restricted_scoring: bool = False
 
     def __post_init__(self) -> None:
@@ -353,6 +355,17 @@ class DirectionalDeviationScoringConfig:
             _validate_positive_int(self.topk_k, "topk_k")
         elif self.topk_k is not None:
             raise ValueError("topk_k must be omitted unless pooling='topk'.")
+
+        if self.signal_normalization not in {"none", "zscore"}:
+            raise ValueError(
+                "signal_normalization must be one of 'none' or 'zscore'; "
+                f"received {self.signal_normalization}."
+            )
+        if not (self.normalization_eps > 0 and self.normalization_eps < float("inf")):
+            raise ValueError(
+                "normalization_eps must be finite and positive; "
+                f"received {self.normalization_eps}."
+            )
 
 
 @dataclass
