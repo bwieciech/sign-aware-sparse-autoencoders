@@ -191,9 +191,13 @@ class DirectionalDeviationAnomalyConfig:
     ] = None
     num_directions: Optional[int] = None
     reference_model_name: str = "sign_aware_gated_sae"
-    direction_selection: Optional[Literal["top_purity", "random", "explicit"]] = None
+    direction_selection: Optional[
+        Literal["top_purity", "top_pi_std", "top_weight_norm", "random", "explicit"]
+    ] = None
     direction_latent_indices: Optional[List[int]] = None
     normalize_directions: bool = True
+    direction_delta_mode: Optional[Literal["fixed_input", "fixed_pi_shift"]] = None
+    max_direction_input_delta: Optional[float] = None
     num_test_high_per_direction: Optional[int] = None
     num_test_low_per_direction: Optional[int] = None
     base_samples: Literal["test_normal", "val_normal"] = "test_normal"
@@ -228,6 +232,8 @@ class DirectionalDeviationAnomalyConfig:
                 or self.num_directions is not None
                 or self.direction_selection is not None
                 or self.direction_latent_indices is not None
+                or self.direction_delta_mode is not None
+                or self.max_direction_input_delta is not None
                 or self.num_test_high_per_direction is not None
                 or self.num_test_low_per_direction is not None
             ):
@@ -271,9 +277,16 @@ class DirectionalDeviationAnomalyConfig:
 
         if self.direction_selection is None:
             self.direction_selection = "top_purity"
-        if self.direction_selection not in {"top_purity", "random", "explicit"}:
+        if self.direction_selection not in {
+            "top_purity",
+            "top_pi_std",
+            "top_weight_norm",
+            "random",
+            "explicit",
+        }:
             raise ValueError(
-                "direction_selection must be one of 'top_purity', 'random', or 'explicit'; "
+                "direction_selection must be one of 'top_purity', 'top_pi_std', "
+                "'top_weight_norm', 'random', or 'explicit'; "
                 f"received {self.direction_selection}."
             )
 
@@ -303,6 +316,35 @@ class DirectionalDeviationAnomalyConfig:
             raise ValueError(
                 "direction_latent_indices must be omitted unless direction_selection='explicit'."
             )
+
+        if self.direction_delta_mode is None:
+            self.direction_delta_mode = "fixed_input"
+        if self.direction_delta_mode not in {"fixed_input", "fixed_pi_shift"}:
+            raise ValueError(
+                "direction_delta_mode must be one of 'fixed_input' or 'fixed_pi_shift'; "
+                f"received {self.direction_delta_mode}."
+            )
+        if (
+            self.direction_delta_mode == "fixed_pi_shift"
+            and not self.normalize_directions
+        ):
+            raise ValueError(
+                "normalize_directions must be True when direction_delta_mode='fixed_pi_shift'."
+            )
+        if self.direction_delta_mode == "fixed_input":
+            if self.max_direction_input_delta is not None:
+                raise ValueError(
+                    "max_direction_input_delta must be omitted when direction_delta_mode='fixed_input'."
+                )
+        else:
+            if self.max_direction_input_delta is not None and not (
+                self.max_direction_input_delta > 0
+                and self.max_direction_input_delta < float("inf")
+            ):
+                raise ValueError(
+                    "max_direction_input_delta must be finite and positive when provided; "
+                    f"received {self.max_direction_input_delta}."
+                )
 
         if (
             self.direction_source == "reference_model_decoder"

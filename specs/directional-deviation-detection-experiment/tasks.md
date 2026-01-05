@@ -212,21 +212,21 @@
     - Add unit tests that verify z-score normalization on a fixed tensor and end-to-end calibration produces finite thresholds.
     - _Requirements: R7_
 
-- [ ] 15. Add strength-controlled feature-direction anomalies (5F)
-  - [ ] 15.1 Extend `DirectionalDeviationAnomalyConfig`
+- [x] 15. Add strength-controlled feature-direction anomalies (5F)
+  - [x] 15.1 Extend `DirectionalDeviationAnomalyConfig`
     - Extend `direction_selection` with `top_pi_std` and `top_weight_norm`.
     - Add `direction_delta_mode ∈ {"fixed_input","fixed_pi_shift"}` and `max_direction_input_delta` (optional cap).
     - _Requirements: R1, R3_
-  - [ ] 15.2 Implement `top_pi_std` and `top_weight_norm` direction selection
+  - [x] 15.2 Implement `top_pi_std` and `top_weight_norm` direction selection
     - For `top_pi_std`, compute per-latent std of the reference model detection signal π on `base_samples` normals and select the top `M` latents deterministically (ties by latent index).
     - For `top_weight_norm`, select the top `M` latents by raw direction L2 norm deterministically (ties by latent index).
     - Persist the selection stats in `anomaly_manifest.json`.
     - _Requirements: R3, R6_
-  - [ ] 15.3 Implement per-direction Δ scaling for `direction_delta_mode="fixed_pi_shift"`
+  - [x] 15.3 Implement per-direction Δ scaling for `direction_delta_mode="fixed_pi_shift"`
     - Compute Δ_k = Δ / (||w_k|| + ε) for each selected direction and generate anomalies as `x' = x ± Δ_k v_k` (with optional clipping).
     - Persist Δ_k in the anomaly manifest and support `anomaly_eval_mode="stream"`.
     - _Requirements: R3, R6_
-  - [ ] 15.4 Add tests for feature-direction selection and delta scaling
+  - [x] 15.4 Add tests for feature-direction selection and delta scaling
     - Verify determinism for `top_pi_std` selection and that anomalies satisfy the expected perturbation formula.
     - Add an integration-style test that checks the reference model's π shifts by approximately ±Δ on a small fixed batch when `fixed_pi_shift` is enabled.
     - _Requirements: R7_

@@ -13,6 +13,7 @@ from sgnsae.experiments.directional_deviation.config import (
     DirectionalDeviationAnomalyConfig,
     DirectionalDeviationDataConfig,
 )
+from sgnsae.experiments.directional_deviation.scoring import extract_detection_signal
 
 
 LABEL_TYPE_NORMAL = 0
@@ -116,10 +117,55 @@ def _select_latent_indices_random(
     return [int(value) for value in perm[:num_directions].tolist()]
 
 
+def _select_latent_indices_top_weight_norm(
+    weight_norms: Tensor, num_directions: int
+) -> List[int]:
+    norm_values = [float(value) for value in weight_norms.cpu().tolist()]
+    indices = list(range(len(norm_values)))
+    indices.sort(key=lambda idx: (-norm_values[idx], idx))
+    return [int(idx) for idx in indices[:num_directions]]
+
+
+def _calculate_latent_pi_std(
+    model: torch.nn.Module,
+    base_samples: Tensor,
+    batch_size: int,
+) -> Tensor:
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive; received {batch_size}.")
+    if base_samples.ndim != 2:
+        raise ValueError(f"Expected base_samples.ndim == 2, got {base_samples.ndim}.")
+    model.eval()
+    sums: Optional[Tensor] = None
+    sumsq: Optional[Tensor] = None
+    total_count = 0
+    with torch.no_grad():
+        for start in range(0, int(base_samples.shape[0]), batch_size):
+            batch = base_samples[start : start + batch_size]
+            signal = extract_detection_signal(model, batch)
+            signal_cpu = signal.detach().to(device="cpu", dtype=torch.float64)
+            if sums is None:
+                sums = torch.zeros(
+                    (signal_cpu.shape[1],), device="cpu", dtype=torch.float64
+                )
+                sumsq = torch.zeros_like(sums)
+            sums += signal_cpu.sum(dim=0)
+            sumsq += (signal_cpu * signal_cpu).sum(dim=0)
+            total_count += int(signal_cpu.shape[0])
+    if sums is None or sumsq is None or total_count == 0:
+        raise ValueError("base_samples must contain at least one sample.")
+    mean = sums / float(total_count)
+    variance = sumsq / float(total_count) - mean * mean
+    variance = torch.clamp(variance, min=0.0)
+    return torch.sqrt(variance).to(dtype=torch.float32)
+
+
 def build_feature_directions_from_decoder(
     model: torch.nn.Module,
     anomaly_config: DirectionalDeviationAnomalyConfig,
     direction_seed: int,
+    base_samples: Optional[Tensor] = None,
+    batch_size: int = 4096,
 ) -> Tuple[Tensor, Dict[str, Any]]:
     if anomaly_config.shift_mode != "feature_direction":
         raise ValueError(
@@ -130,6 +176,7 @@ def build_feature_directions_from_decoder(
 
     decoder = _extract_decoder_matrix(model)
     purity = _calculate_latent_purity(decoder)
+    weight_norms = torch.linalg.norm(decoder, dim=0)
     num_directions = int(anomaly_config.num_directions)
     num_latents = int(decoder.shape[1])
 
@@ -140,6 +187,29 @@ def build_feature_directions_from_decoder(
         )
     if selection == "top_purity":
         latent_indices = _select_latent_indices_top_purity(purity, num_directions)
+        selected_pi_std = None
+        selected_weight_norms = None
+    elif selection == "top_pi_std":
+        if base_samples is None:
+            raise ValueError(
+                "base_samples must be provided when direction_selection='top_pi_std'."
+            )
+        pi_std = _calculate_latent_pi_std(
+            model=model,
+            base_samples=base_samples,
+            batch_size=batch_size,
+        )
+        latent_indices = _select_latent_indices_top_weight_norm(pi_std, num_directions)
+        selected_pi_std = [float(value) for value in pi_std[latent_indices].tolist()]
+        selected_weight_norms = None
+    elif selection == "top_weight_norm":
+        latent_indices = _select_latent_indices_top_weight_norm(
+            weight_norms, num_directions
+        )
+        selected_pi_std = None
+        selected_weight_norms = [
+            float(value) for value in weight_norms[latent_indices].tolist()
+        ]
     elif selection == "random":
         generator = _create_cpu_generator(direction_seed)
         latent_indices = _select_latent_indices_random(
@@ -147,6 +217,8 @@ def build_feature_directions_from_decoder(
             num_directions=num_directions,
             generator=generator,
         )
+        selected_pi_std = None
+        selected_weight_norms = None
     elif selection == "explicit":
         if anomaly_config.direction_latent_indices is None:
             raise ValueError(
@@ -155,6 +227,8 @@ def build_feature_directions_from_decoder(
         latent_indices = [
             int(value) for value in anomaly_config.direction_latent_indices
         ]
+        selected_pi_std = None
+        selected_weight_norms = None
     else:
         raise ValueError(f"Unsupported direction_selection={selection}.")
 
@@ -165,16 +239,45 @@ def build_feature_directions_from_decoder(
         )
 
     directions = decoder[:, latent_indices].T.to(dtype=torch.float32)
+    selected_weight_norms_raw = weight_norms[latent_indices].to(dtype=torch.float32)
     if anomaly_config.normalize_directions:
         norms = torch.linalg.norm(directions, dim=1, keepdim=True)
         directions = directions / (norms + _DIRECTION_EPSILON)
 
     selected_purity = [float(value) for value in purity[latent_indices].tolist()]
+    direction_delta_mode = anomaly_config.direction_delta_mode
+    if direction_delta_mode is None:
+        raise ValueError(
+            "direction_delta_mode must be provided when shift_mode='feature_direction'."
+        )
+    direction_input_deltas: Optional[List[float]] = None
+    clipped_indices: Optional[List[int]] = None
+    max_direction_input_delta = anomaly_config.max_direction_input_delta
+    if direction_delta_mode == "fixed_pi_shift":
+        input_deltas = float(anomaly_config.delta) / (
+            selected_weight_norms_raw + _DIRECTION_EPSILON
+        )
+        clipped_mask = torch.zeros_like(input_deltas, dtype=torch.bool)
+        if max_direction_input_delta is not None:
+            cap = float(max_direction_input_delta)
+            clipped_mask = input_deltas > cap
+            input_deltas = torch.clamp(input_deltas, max=cap)
+        direction_input_deltas = [float(value) for value in input_deltas.tolist()]
+        clipped_indices = [
+            int(index) for index in clipped_mask.nonzero(as_tuple=False).flatten()
+        ]
+
     metadata: Dict[str, Any] = {
         "direction_source": anomaly_config.direction_source,
         "direction_selection": selection,
         "direction_latent_indices": latent_indices,
         "direction_latent_purity": selected_purity,
+        "direction_latent_pi_std": selected_pi_std,
+        "direction_latent_weight_norm": selected_weight_norms,
+        "direction_delta_mode": direction_delta_mode,
+        "direction_input_deltas": direction_input_deltas,
+        "max_direction_input_delta": max_direction_input_delta,
+        "direction_input_deltas_clipped_indices": clipped_indices,
         "normalize_directions": bool(anomaly_config.normalize_directions),
         "seed_plan": {"direction_seed": _normalize_torch_seed(direction_seed)},
     }
@@ -194,19 +297,47 @@ def build_fixed_random_directions(
         raise ValueError("num_directions must be provided.")
     generator = _create_cpu_generator(direction_seed)
     num_directions = int(anomaly_config.num_directions)
-    directions = torch.randn(
+    raw_directions = torch.randn(
         (num_directions, data_config.num_channels),
         device="cpu",
         dtype=torch.float32,
         generator=generator,
     )
+    weight_norms_raw = torch.linalg.norm(raw_directions, dim=1)
+    directions = raw_directions
     if anomaly_config.normalize_directions:
         norms = torch.linalg.norm(directions, dim=1, keepdim=True)
         directions = directions / (norms + _DIRECTION_EPSILON)
 
+    direction_delta_mode = anomaly_config.direction_delta_mode
+    if direction_delta_mode is None:
+        raise ValueError(
+            "direction_delta_mode must be provided when shift_mode='feature_direction'."
+        )
+    direction_input_deltas: Optional[List[float]] = None
+    clipped_indices: Optional[List[int]] = None
+    max_direction_input_delta = anomaly_config.max_direction_input_delta
+    if direction_delta_mode == "fixed_pi_shift":
+        input_deltas = float(anomaly_config.delta) / (
+            weight_norms_raw.to(dtype=torch.float32) + _DIRECTION_EPSILON
+        )
+        clipped_mask = torch.zeros_like(input_deltas, dtype=torch.bool)
+        if max_direction_input_delta is not None:
+            cap = float(max_direction_input_delta)
+            clipped_mask = input_deltas > cap
+            input_deltas = torch.clamp(input_deltas, max=cap)
+        direction_input_deltas = [float(value) for value in input_deltas.tolist()]
+        clipped_indices = [
+            int(index) for index in clipped_mask.nonzero(as_tuple=False).flatten()
+        ]
+
     metadata: Dict[str, Any] = {
         "direction_source": "fixed_random",
         "direction_selection": "fixed_random",
+        "direction_delta_mode": direction_delta_mode,
+        "direction_input_deltas": direction_input_deltas,
+        "max_direction_input_delta": max_direction_input_delta,
+        "direction_input_deltas_clipped_indices": clipped_indices,
         "normalize_directions": bool(anomaly_config.normalize_directions),
         "seed_plan": {"direction_seed": _normalize_torch_seed(direction_seed)},
     }
@@ -466,6 +597,20 @@ def _build_feature_direction_anomaly_manifest(
         ),
         "direction_latent_indices": direction_metadata.get("direction_latent_indices"),
         "direction_latent_purity": direction_metadata.get("direction_latent_purity"),
+        "direction_latent_pi_std": direction_metadata.get("direction_latent_pi_std"),
+        "direction_latent_weight_norm": direction_metadata.get(
+            "direction_latent_weight_norm"
+        ),
+        "direction_delta_mode": direction_metadata.get(
+            "direction_delta_mode", anomaly_config.direction_delta_mode
+        ),
+        "max_direction_input_delta": direction_metadata.get(
+            "max_direction_input_delta", anomaly_config.max_direction_input_delta
+        ),
+        "direction_input_deltas": direction_metadata.get("direction_input_deltas"),
+        "direction_input_deltas_clipped_indices": direction_metadata.get(
+            "direction_input_deltas_clipped_indices"
+        ),
         "normalize_directions": bool(anomaly_config.normalize_directions),
         "direction_indices_to_evaluate": list(range(num_directions)),
         "num_test_high_per_direction": num_high,
@@ -679,12 +824,37 @@ def generate_anomaly_test_data(
             data_config=data_config,
             anomaly_config=anomaly_config,
         )
+        direction_input_deltas_tensor: Optional[Tensor] = None
+        if anomaly_config.direction_delta_mode == "fixed_pi_shift":
+            raw_deltas = resolved_metadata.get("direction_input_deltas")
+            if raw_deltas is None:
+                raise ValueError(
+                    "direction_input_deltas must be provided when direction_delta_mode='fixed_pi_shift'."
+                )
+            if not isinstance(raw_deltas, list):
+                raise ValueError(
+                    "direction_input_deltas must be a list when direction_delta_mode='fixed_pi_shift'."
+                )
+            deltas_list = [float(value) for value in raw_deltas]
+            if len(deltas_list) != int(directions.shape[0]):
+                raise ValueError(
+                    "direction_input_deltas must have length num_directions; received "
+                    f"{len(deltas_list)} vs {directions.shape[0]}."
+                )
+            if any(not (delta > 0 and delta < float("inf")) for delta in deltas_list):
+                raise ValueError(
+                    "direction_input_deltas must contain only finite positive values."
+                )
+            direction_input_deltas_tensor = torch.tensor(
+                deltas_list, device="cpu", dtype=torch.float32
+            )
         anomaly_stream = DirectionalDeviationFeatureDirectionAnomalyStream(
             data_config=data_config,
             anomaly_config=anomaly_config,
             device=device,
             batch_size=batch_size,
             directions=directions,
+            direction_input_deltas=direction_input_deltas_tensor,
             sample_seed=sample_seed,
         )
         manifest = _build_feature_direction_anomaly_manifest(
@@ -752,6 +922,7 @@ class DirectionalDeviationFeatureDirectionAnomalyStream:
     device: str
     batch_size: int
     directions: Tensor
+    direction_input_deltas: Optional[Tensor]
     sample_seed: int
 
     def __iter__(self) -> Iterator[DirectionalDeviationAnomalyBatch]:
@@ -776,17 +947,42 @@ class DirectionalDeviationFeatureDirectionAnomalyStream:
             if self.anomaly_config.num_test_low_per_direction is not None
             else int(self.data_config.num_test_low_per_channel)
         )
-        delta = float(self.anomaly_config.delta)
         directions_cpu = self.directions.to(device="cpu", dtype=torch.float32)
+        input_deltas = (
+            self.direction_input_deltas.to(device="cpu", dtype=torch.float32)
+            if self.direction_input_deltas is not None
+            else None
+        )
+        if input_deltas is not None:
+            if input_deltas.ndim != 1:
+                raise ValueError(
+                    f"Expected direction_input_deltas.ndim == 1, got {input_deltas.ndim}."
+                )
+            if int(input_deltas.shape[0]) != int(directions_cpu.shape[0]):
+                raise ValueError(
+                    "Expected direction_input_deltas.shape[0] == directions.shape[0], got "
+                    f"{input_deltas.shape[0]} vs {directions_cpu.shape[0]}."
+                )
+            if not torch.all(torch.isfinite(input_deltas)).item():
+                raise ValueError(
+                    "direction_input_deltas must contain only finite values."
+                )
+            if torch.any(input_deltas <= 0).item():
+                raise ValueError("direction_input_deltas must be positive.")
 
         for direction_index in range(int(directions_cpu.shape[0])):
             direction_vector = directions_cpu[direction_index]
+            base_delta = (
+                float(input_deltas[direction_index])
+                if input_deltas is not None
+                else float(self.anomaly_config.delta)
+            )
             yield from self._iter_direction(
                 generator=generator,
                 direction_index=int(direction_index),
                 direction_vector=direction_vector,
                 label_type=LABEL_TYPE_HIGH,
-                delta=delta,
+                delta=base_delta,
                 num_samples=num_high,
             )
             yield from self._iter_direction(
@@ -794,7 +990,7 @@ class DirectionalDeviationFeatureDirectionAnomalyStream:
                 direction_index=int(direction_index),
                 direction_vector=direction_vector,
                 label_type=LABEL_TYPE_LOW,
-                delta=-delta,
+                delta=-base_delta,
                 num_samples=num_low,
             )
 

@@ -392,6 +392,72 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 reference_model_name="",
             )
 
+    def test_anomaly_config_feature_direction_accepts_top_pi_std_and_top_weight_norm(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "delta": 1.0,
+            "shift_mode": "feature_direction",
+            "direction_source": "reference_model_decoder",
+            "num_directions": 1,
+        }
+
+        # when
+        top_pi_std = config_module.DirectionalDeviationAnomalyConfig(
+            **base_kwargs, direction_selection="top_pi_std"
+        )
+        top_weight_norm = config_module.DirectionalDeviationAnomalyConfig(
+            **base_kwargs, direction_selection="top_weight_norm"
+        )
+
+        # then
+        self.assertEqual(top_pi_std.direction_selection, "top_pi_std")
+        self.assertEqual(top_weight_norm.direction_selection, "top_weight_norm")
+        self.assertEqual(top_pi_std.direction_delta_mode, "fixed_input")
+        self.assertEqual(top_weight_norm.direction_delta_mode, "fixed_input")
+
+    def test_anomaly_config_feature_direction_rejects_invalid_direction_delta_mode_and_max_delta(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = {
+            "delta": 1.0,
+            "shift_mode": "feature_direction",
+            "direction_source": "reference_model_decoder",
+            "num_directions": 1,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **base_kwargs, direction_delta_mode="unsupported"  # type: ignore[arg-type]
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **base_kwargs,
+                direction_delta_mode="fixed_input",
+                max_direction_input_delta=1.0,
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **base_kwargs,
+                direction_delta_mode="fixed_pi_shift",
+                normalize_directions=False,
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **base_kwargs,
+                direction_delta_mode="fixed_pi_shift",
+                max_direction_input_delta=0.0,
+            )
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationAnomalyConfig(
+                **base_kwargs,
+                direction_delta_mode="fixed_pi_shift",
+                max_direction_input_delta=float("inf"),
+            )
+
     def test_threshold_config_rejects_invalid_quantile_and_fpr(self) -> None:
         # given
         base_kwargs = {

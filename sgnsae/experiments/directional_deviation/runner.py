@@ -485,10 +485,17 @@ def _run_leaf_experiment(
             device=config.device,
         )
         direction_seed = config.data.seed + 6
+        base_samples = (
+            normal_data["x_test_normal"]
+            if config.anomaly.base_samples == "test_normal"
+            else normal_data["x_val"]
+        )
         anomaly_directions, direction_metadata = build_feature_directions_from_decoder(
             model=reference_training_output["model"],
             anomaly_config=config.anomaly,
             direction_seed=direction_seed,
+            base_samples=base_samples,
+            batch_size=batch_size,
         )
         anomaly_data = generate_anomaly_test_data(
             data_config=config.data,
