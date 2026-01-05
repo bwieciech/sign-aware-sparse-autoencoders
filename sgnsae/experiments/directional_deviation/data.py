@@ -254,9 +254,26 @@ def build_feature_directions_from_decoder(
     clipped_indices: Optional[List[int]] = None
     max_direction_input_delta = anomaly_config.max_direction_input_delta
     if direction_delta_mode == "fixed_pi_shift":
-        input_deltas = float(anomaly_config.delta) / (
-            selected_weight_norms_raw + _DIRECTION_EPSILON
-        )
+        log_alpha_gate = getattr(model, "log_alpha_gate", None)
+        if isinstance(log_alpha_gate, Tensor):
+            log_alpha_gate_cpu = log_alpha_gate.detach().to(
+                device="cpu", dtype=torch.float32
+            )
+            if log_alpha_gate_cpu.ndim != 2 or log_alpha_gate_cpu.shape[0] != 1:
+                raise ValueError(
+                    "log_alpha_gate must have shape (1, d_hidden) when n_instances==1."
+                )
+            exp_clamp = float(getattr(model, "_exp_clamp", 20.0))
+            log_alpha_gate_cpu = log_alpha_gate_cpu.clamp(min=-exp_clamp, max=exp_clamp)
+            alpha = torch.exp(log_alpha_gate_cpu)[0]
+            selected_alpha = alpha[latent_indices].to(dtype=torch.float32)
+            input_deltas = float(anomaly_config.delta) / (
+                selected_alpha + _DIRECTION_EPSILON
+            )
+        else:
+            input_deltas = float(anomaly_config.delta) / (
+                selected_weight_norms_raw + _DIRECTION_EPSILON
+            )
         clipped_mask = torch.zeros_like(input_deltas, dtype=torch.bool)
         if max_direction_input_delta is not None:
             cap = float(max_direction_input_delta)

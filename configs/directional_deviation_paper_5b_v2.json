@@ -37,6 +37,7 @@
     "num_directions": 128,
     "normalize_directions": true,
     "direction_delta_mode": "fixed_pi_shift",
+    "max_direction_input_delta": 1000.0,
     "num_test_high_per_direction": 50,
     "num_test_low_per_direction": 50,
     "base_samples": "val_normal"

@@ -1850,15 +1850,18 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
         )
 
         class DummyModel(torch.nn.Module):
-            def __init__(self, decoder: Tensor) -> None:
+            def __init__(self, decoder: Tensor, log_alpha_gate: Tensor) -> None:
                 super().__init__()
                 self.W_dec = decoder
                 self.n_instances = 1
+                self.log_alpha_gate = log_alpha_gate
+                self._exp_clamp = 20.0
 
         decoder = torch.tensor(
             [[[1.0, 0.0], [0.0, 2.0], [0.0, 0.0], [0.0, 0.0]]], dtype=torch.float32
         )
-        model = DummyModel(decoder)
+        log_alpha_gate = torch.log(torch.tensor([[2.0, 0.5]], dtype=torch.float32))
+        model = DummyModel(decoder=decoder, log_alpha_gate=log_alpha_gate)
 
         anomaly_config = DirectionalDeviationAnomalyConfig(
             delta=2.0,
@@ -1876,6 +1879,9 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
             anomaly_config=anomaly_config,
             direction_seed=123,
         )
+        alpha = torch.exp(
+            model.log_alpha_gate.clamp(min=-model._exp_clamp, max=model._exp_clamp)
+        )[0].to(device="cpu", dtype=torch.float32)
         anomaly_data = generate_anomaly_test_data(
             data_config=data_config,
             anomaly_config=anomaly_config,
@@ -1899,21 +1905,24 @@ class TestDirectionalDeviationDataGeneration(unittest.TestCase):
         for index in range(int(x_anom.shape[0])):
             direction_index = int(labels_target[index])
             latent_index = int(latent_indices[direction_index])
-            raw_direction = decoder[0, :, latent_index].to(device="cpu")
-            raw_norm = float(torch.linalg.norm(raw_direction))
+            alpha_k = float(alpha[latent_index])
             input_delta = float(direction_input_deltas[direction_index])
             direction_vector = directions[direction_index].to(device="cpu")
             sign = 1.0 if int(labels_type[index]) == LABEL_TYPE_HIGH else -1.0
 
             x_base = x_anom[index] - sign * input_delta * direction_vector
-            pi_anom = float(torch.dot(x_anom[index], raw_direction))
-            pi_base = float(torch.dot(x_base, raw_direction))
+            pi_anom = alpha_k * float(torch.dot(x_anom[index], direction_vector))
+            pi_base = alpha_k * float(torch.dot(x_base, direction_vector))
             observed_shift = pi_anom - pi_base
+            expected_input_delta = float(anomaly_config.delta) / (
+                alpha_k + float(data_module._DIRECTION_EPSILON)
+            )
+            self.assertAlmostEqual(input_delta, expected_input_delta, places=5)
             expected_shift = (
                 sign
                 * float(anomaly_config.delta)
-                * raw_norm
-                / (raw_norm + float(data_module._DIRECTION_EPSILON))
+                * alpha_k
+                / (alpha_k + float(data_module._DIRECTION_EPSILON))
             )
             self.assertAlmostEqual(observed_shift, expected_shift, places=5)
 
