@@ -250,9 +250,10 @@ For paper plots and numbers, use:
 
 ### 2) What the config controls
 
-- Dataset: `data.num_channels` (`N`), normal sample counts, anomaly counts (`num_test_high_per_channel`, `num_test_low_per_channel`), anomaly streaming/materialization (`data.anomaly_eval_mode`).
-- Anomalies: `anomaly.delta` (`Δ`), `anomaly.shift_mode` (`single_channel` or `subset`).
+- Dataset: `data.num_channels` (`N`), normal sample counts, anomaly counts (`num_test_high_per_channel`, `num_test_low_per_channel`), anomaly streaming/materialization (`data.anomaly_eval_mode`), and symmetry-breaking normal modes (`data.normal_mode`, `data.channel_stds`, `data.non_gaussian_dist`).
+- Anomalies: `anomaly.delta` (`Δ`), `anomaly.shift_mode` (`single_channel`, `subset`, or `feature_direction`). For feature directions: `anomaly.direction_source`, `anomaly.num_directions`, `anomaly.reference_model_name`, `anomaly.direction_selection`, `anomaly.direction_latent_indices`, `anomaly.normalize_directions`, and per-direction counts (`anomaly.num_test_high_per_direction`, `anomaly.num_test_low_per_direction`).
 - Calibration: `thresholds.latent_quantile` (per-latent thresholds), `thresholds.score_fpr` (fixed-FPR score thresholds).
+- Scoring: `scoring.pooling` (`sum` / `max` / `topk`), `scoring.topk_k` (for `topk`), and `scoring.target_restricted_scoring` (single-channel only).
 - Models: `models[]` (each has `name`, `sae_class`, `sign_aware`, `d_hidden`, training hyperparameters).
 - Sweeps:
   - Width sweep: add `"width_sweep": [32, 64, 128]` at the run root to run separate `width_<H>/` subruns.
@@ -268,22 +269,24 @@ Run root (`<run_dir>/`):
 Data export (`<run_dir>/data/`):
 - `generator_config.json`
 - `anomaly_manifest.json`
+- `anomaly_directions.pt` (only for `shift_mode="feature_direction"`)
 - `sampled_data.pt`
 
 Per model (`<run_dir>/models/<model_name>/`):
 - `model.pt`
 - `model_config.json`
 - `training_metrics.json`
+- `decoder_alignment.json` (latent-to-channel alignment diagnostics)
 - `thresholds/thresholds_metadata.json`
 - `thresholds/score_thresholds.json`
 - `evaluation.json`
-- Baseline models also write `thresholds/evidence_tau.pt`
+- Baseline models also write per-latent direction assignments to `thresholds/latent_directions.pt`
 - Sign-aware models also write `thresholds/tau_plus.pt` and `thresholds/tau_minus.pt`
 
 Width sweep only:
 - Each width subrun directory (`<run_dir>/width_<H>/`) includes `metrics.json` and its own full set of run artifacts.
 - `<run_dir>/per-width metrics.json` collates per-width `metrics.json` (and uses mean/std when a seed sweep is enabled).
-- `plots/recall_vs_width.png` and `plots/coverage_vs_width.png` summarize performance vs width from `comparison_summary.json`.
+- `plots/recall_vs_width.png`, `plots/coverage_vs_width.png`, and `plots/unique_channels_vs_width.png` summarize performance and alignment vs width from `comparison_summary.json`.
 
 ### 4) Verify outputs (required artifacts checklist)
 
@@ -302,11 +305,14 @@ For each width subrun (`<run_dir>/width_<H>/`):
 For each leaf run (`<run_dir>/width_<H>/seed_<seed>/`):
 - `data/generator_config.json`
 - `data/anomaly_manifest.json`
+- `data/anomaly_directions.pt` (only for `shift_mode="feature_direction"`)
 - `data/sampled_data.pt`
 - `comparison_summary.json`
 - `plots/leaf_summary.png`
 - `plots/score_histograms.png`
+- `plots/decoder_purity_hist.png`
 - `models/<model_name>/model.pt`
 - `models/<model_name>/training_metrics.json`
 - `models/<model_name>/thresholds/score_thresholds.json`
 - `models/<model_name>/evaluation.json`
+- `models/<model_name>/decoder_alignment.json`

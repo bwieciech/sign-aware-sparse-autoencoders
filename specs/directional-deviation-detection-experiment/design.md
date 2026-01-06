@@ -1,349 +1,421 @@
-# Directional Deviation Detection Experiment Design (Protocol B)
+# Directional Deviation Detection Experiment (Protocol B) — Design
 
 ## Overview
 
-This document describes the design of Protocol B (“Directional Deviation Detection; resource constrained”) for evaluating the Sign-Aware Gated Sparse Autoencoder against baseline SAE variants on synthetic “sensor array” data.
+Protocol B evaluates SAE variants as **resource-constrained directional anomaly detectors** under a strict latent budget
+`H < N` on synthetic “sensor array” data.
 
-The experiment is intended to answer:
-- Under a strict latent budget \(H < N\), how well can each model detect “too high” (\(+\Delta\)) vs “too low” (\(-\Delta\)) deviations?
-- Does the Sign-Aware gate provide direction-aware detection at fixed false-positive rate, and improve “both-directions” coverage under the same latent budget?
+This design document updates the existing Protocol B implementation to incorporate the improvements identified after the
+first paper run:
 
-Implementation will follow the structure and conventions of the existing experiment module `sgnsae.experiments.polarity_dial`:
-- dataclass-based config models with JSON/YAML loading,
-- a runner that creates structured run directories under `[output_dir]/<experiment_name>/<run_id>/`,
-- reusable training orchestration per model variant,
-- evaluation utilities that write machine-readable JSON artifacts and (optional) plots.
+- **5A** Break rotational symmetry in the normal distribution so “channel semantics” are learnable.
+- **5B** Add a feature-space anomaly variant (anomalies along learned directions).
+- **5C** Add localized scoring (max/top‑k pooling) and optional target-restricted scoring for single-channel anomalies.
+- **5D** Add decoder alignment diagnostics (channel purity / axis alignment).
+- **5E** Add optional per-latent signal normalization (z-score on validation normals) before thresholding/pooling.
+- **5F** Add strength-controlled feature-direction anomalies (direction selection tied to π statistics and optional per-direction Δ scaling).
+
+The implementation should follow repository conventions used by `sgnsae.experiments.polarity_dial`:
+- dataclass configs with validation in `__post_init__`
+- deterministic run directories under `<output_dir>/directional_deviation/<run_id>/`
+- machine-readable JSON artifacts and minimal plots
+
+---
 
 ## Architecture
 
-The experiment is split into five subsystems:
-
-1. Data generation:
-   - Module: `sgnsae.experiments.directional_deviation.data`
-   - Generates normal train/validation/test data and labeled anomaly test data.
-
-2. Training and model orchestration:
-   - Module: `sgnsae.experiments.directional_deviation.training`
-   - Trains SAE variants under a fixed width \(H\) (and optionally in a sweep over widths).
-
-3. Scoring and calibration:
-   - Module: `sgnsae.experiments.directional_deviation.scoring`
-   - Extracts per-latent detection signals, calibrates per-latent thresholds \((\tau_i^+, \tau_i^-)\), and computes directional scores.
-
-4. Evaluation:
-   - Module: `sgnsae.experiments.directional_deviation.evaluation`
-   - Computes Directional Recall @ Fixed FPR for high and low anomalies, plus optional per-channel coverage metrics.
-
-5. Plotting and reporting:
-   - Module: `sgnsae.experiments.directional_deviation.plotting`
-   - Generates plots (recall vs \(H\), coverage vs \(H\), score histograms) and writes summary/comparison JSON artifacts.
-
-CLI entrypoint:
-- Script: `sgnsae/scripts/run_directional_deviation_experiment.py`
-- Loads a config, dispatches to the runner, and prints the final run directory path.
-
-Mermaid diagram (dataflow):
-
 ```mermaid
 flowchart LR
-  C[Config] --> R[Runner]
-  R --> D[Data Generator]
-  D -->|normal train/val| T[Trainer]
-  T --> M[Trained Model]
-  D -->|normal val| S[Scoring & Calibration]
-  M --> S
-  D -->|labeled anomaly test| E[Evaluation]
-  S --> E
-  M --> E
-  E --> A[Artifacts: metrics JSON + plots]
+  C[Config] --> D[Normal data generator]
+  D --> T[Train SAE variants on normal]
+  T -->|optional: derive directions| A[Anomaly generator]
+  A --> S[Scoring + calibration]
+  S --> E[Evaluation + diagnostics]
+  E --> R[Artifacts + plots]
 ```
+
+Key change vs the current pipeline: when `shift_mode="feature_direction"`, anomaly generation depends on a trained
+reference model (decoder directions). Therefore anomaly generation MUST happen **after** training the reference model.
+
+---
 
 ## Components and Interfaces
 
-### Configuration
+### 1) Configuration
 
 Module: `sgnsae.experiments.directional_deviation.config`
 
-Config objects are dataclasses (matching the existing `polarity_dial` style) and must validate inputs in `__post_init__` with clear `ValueError` messages.
+#### Root experiment config
 
-Recommended models:
+`DirectionalDeviationExperimentConfig` (existing, extend):
+- `output_dir: str`
+- `device: Literal["auto","cpu","cuda"]`
+- `verbose: bool`
+- `log_every_n_steps: int`
+- `log_every_n_epochs: int`
+- `coverage_recall_target: float` (default `0.8`)
+- `width_sweep: Optional[List[int]]`
+- `data: DirectionalDeviationDataConfig`
+- `anomaly: DirectionalDeviationAnomalyConfig`
+- `thresholds: DirectionalDeviationThresholdConfig`
+- `scoring: DirectionalDeviationScoringConfig` **(new; optional with defaults)**
+- `models: List[DirectionalDeviationModelVariantConfig]`
 
-- `DirectionalDeviationDataConfig`
-  - `seed: int`
-  - `seeds: Optional[List[int]]` (optional; if set, runner executes one sub-run per seed and collates)
-  - `num_train: int`
-  - `num_val: int`
-  - `num_test_normal: int`
-  - `num_test_high_per_channel: int`
-  - `num_test_low_per_channel: int`
-  - `num_channels: int` (\(N\))
-  - `noise_std: float` (optional; default `0.0` to match \(\mathcal{N}(0, I)\) exactly)
-  - `normal_mode: Literal["standard_normal", "heteroskedastic_normal"]` (optional; default `"standard_normal"`)
-  - `channel_stds: Optional[List[float]]` (required if `normal_mode="heteroskedastic_normal"`)
-  - `anomaly_eval_mode: Literal["materialize", "stream"]` (optional; default `"stream"` for memory safety)
+#### Data config (normal generation)
 
-- `DirectionalDeviationAnomalyConfig`
-  - `delta: float` (\(\Delta\))
-  - `shift_mode: Literal["single_channel", "subset"]`
-  - `subset_size: Optional[int]` (required for `shift_mode="subset"`)
-  - `channels_to_evaluate: Optional[List[int]]` (default: all channels)
+`DirectionalDeviationDataConfig` (extend):
+- `seed: int`
+- `seeds: Optional[List[int]]`
+- `num_train: int`
+- `num_val: int`
+- `num_test_normal: int`
+- `num_test_high_per_channel: int`
+- `num_test_low_per_channel: int`
+- `num_channels: int` (`N`)
+- `noise_std: float` (default `0.0`)
+- `normal_mode: Literal[
+    "standard_normal",
+    "heteroskedastic_normal",
+    "iid_non_gaussian",
+    "non_gaussian_heteroskedastic"
+  ]`
+- `channel_stds: Optional[List[float]]`
+  - required for `heteroskedastic_normal` and `non_gaussian_heteroskedastic`
+- `ensure_unique_channel_stds: bool = True`
+- `non_gaussian_dist: Optional[Literal["laplace","logistic","student_t"]]`
+- `student_t_df: Optional[float]` (required if `non_gaussian_dist="student_t"`)
+- `anomaly_eval_mode: Literal["materialize","stream"]` (default `"stream"`)
+- `train_anomaly_fraction: float` (default `0.0`)
+  - fraction of anomalies mixed into training (optional robustness experiment)
 
-- `DirectionalDeviationThresholdConfig`
-  - `latent_quantile: float` (default: `0.99` for \(\tau_i^+\), \(\tau_i^-\))
-  - `score_fpr: float` (default: `0.01` for per-direction score thresholds)
-  - `min_validation_samples: int` (default: `1000`)
-  - `deterministic_algorithms: bool` (optional; default `False`; if `True`, enable framework deterministic settings when possible)
+Validation rules:
+- `num_channels > 0`, `d_hidden < num_channels` checked elsewhere
+- `noise_std >= 0`
+- if `channel_stds` is provided, length must equal `num_channels` and all values > 0
+- if `ensure_unique_channel_stds`, enforce all stds distinct (within exact float equality)
 
-- `DirectionalDeviationModelVariantConfig`
-  - `name: str` (e.g., `"relu_sae"`, `"gated_sae"`, `"sign_aware_gated_sae"`)
-  - `sae_class: str` (`"SAE"` or `"GatedSAE"`)
-  - `sign_aware: bool`
-  - `single_activation_offset: bool`
-  - `reset_activation_offsets_on_resample: bool`
-  - `symmetric_magnitude: bool` (only meaningful for sign-aware gated)
-  - `d_hidden: int` (\(H\))
-  - `sparsity_coeff: float`
-  - `learning_rate: float`
-  - `num_epochs: int`
-  - `batch_size: int`
-  - `adam_betas: Tuple[float, float]`
-  - `resample_latents_epochs: float`
+#### Anomaly config
 
-- `DirectionalDeviationExperimentConfig`
-  - `output_dir: str`
-  - `device: Literal["cpu", "cuda", "auto"]`
-  - `data: DirectionalDeviationDataConfig`
-  - `anomaly: DirectionalDeviationAnomalyConfig`
-  - `thresholds: DirectionalDeviationThresholdConfig`
-  - `models: List[DirectionalDeviationModelVariantConfig]`
-  - `width_sweep: Optional[List[int]]` (if set, overrides `d_hidden` per variant to produce budget sweeps)
-  - `run_id: Optional[str]`
-  - `verbose: bool`
-  - `log_every_n_steps: int`
-  - `log_every_n_epochs: int`
-  - `wandb_project: Optional[str]`
-  - `wandb_api_key: Optional[str]` (optional; if provided, MUST be redacted and MUST NOT be persisted to run artifacts)
+`DirectionalDeviationAnomalyConfig` (extend):
+- `delta: float` (`Δ`)
+- `shift_mode: Literal["single_channel","subset","feature_direction"]`
+- `subset_size: Optional[int]` (required if `shift_mode="subset"`)
+- Feature-direction fields (required if `shift_mode="feature_direction"`):
+  - `direction_source: Literal["reference_model_decoder","fixed_random","per_model_decoder"]`
+  - `num_directions: int` (`M`)
+  - `reference_model_name: str` (default `"sign_aware_gated_sae"`)
+  - `direction_selection: Literal["top_purity","top_pi_std","top_weight_norm","random","explicit"]`
+  - `direction_latent_indices: Optional[List[int]]` (required if `direction_selection="explicit"`)
+  - `normalize_directions: bool = True` (normalize to unit L2 norm)
+  - `direction_delta_mode: Literal["fixed_input","fixed_pi_shift"] = "fixed_input"`
+    - `fixed_input`: anomalies are `x' = x ± Δ v_k`
+    - `fixed_pi_shift`: compute per-direction input deltas Δ_k so the reference latent has ∣Δπ∣≈Δ
+  - `max_direction_input_delta: Optional[float] = None` (optional safety cap when `fixed_pi_shift` is enabled)
+  - `num_test_high_per_direction: Optional[int]`
+  - `num_test_low_per_direction: Optional[int]`
+  - `base_samples: Literal["test_normal","val_normal"] = "test_normal"`
 
-### Data Generation
+Notes:
+- If `num_test_*_per_direction` is not provided, fall back to `data.num_test_*_per_channel` to avoid breaking old configs.
+- For feature anomalies, “target index” is a direction index `k ∈ [0, M)`.
+
+#### Scoring config (new)
+
+`DirectionalDeviationScoringConfig`:
+- `pooling: Literal["sum","max","topk"] = "sum"`
+- `topk_k: Optional[int]` (required if pooling=`"topk"`)
+- `signal_normalization: Literal["none","zscore"] = "none"`
+- `normalization_eps: float = 1e-8`
+- `target_restricted_scoring: bool = False`
+  - Only meaningful for `shift_mode="single_channel"` (and optionally for feature directions if desired).
+  - If true, scores for a target are computed only from latents assigned to that target.
+
+#### Model variant config
+
+Keep existing fields; no changes required for 5A–5F.
+
+---
+
+### 2) Data generation
 
 Module: `sgnsae.experiments.directional_deviation.data`
 
-Core functions:
+#### Normal samples
+
+Implement a single entrypoint:
 
 ```python
-def generate_normal_data(
-    config: DirectionalDeviationDataConfig,
-    device: str,
-) -> dict[str, torch.Tensor]:
-    ...
+def generate_normal_splits(config: DirectionalDeviationDataConfig, device: str) -> dict[str, Tensor]:
+    # returns x_train, x_val, x_test_normal
+```
 
-def generate_anomaly_test_data(
-    config: DirectionalDeviationDataConfig,
-    anomaly_config: DirectionalDeviationAnomalyConfig,
-    device: str,
-) -> dict[str, torch.Tensor]:
+Sampling rules by `normal_mode`:
+
+- `standard_normal`: `torch.randn((num, N))`
+- `heteroskedastic_normal`: `torch.randn((num, N)) * channel_stds`
+- `iid_non_gaussian`:
+  - sample IID from the selected distribution with mean 0 and variance 1
+- `non_gaussian_heteroskedastic`:
+  - sample IID non-Gaussian variance 1, then multiply by `channel_stds`
+
+Implementation detail (variance normalization):
+- Laplace(0, b): var = 2 b^2 ⇒ choose `b = 1 / sqrt(2)` to get var=1
+- Logistic(0, s): var = π^2 s^2 / 3 ⇒ choose `s = sqrt(3) / π` to get var=1
+- Student‑t(df): var = df/(df-2) for df>2 ⇒ sample standard t and scale by `sqrt((df-2)/df)` to get var=1
+
+Finally, add optional Gaussian noise:
+- `x = x + noise_std * torch.randn_like(x)` for all modes.
+
+Export:
+- write `<run_dir>/data/generator_config.json` capturing all parameters and the resolved derived constants (e.g., Laplace b).
+- write `<run_dir>/data/sampled_data.pt` containing small previews of each split for debugging.
+
+---
+
+### 3) Anomaly generation
+
+Module: `sgnsae.experiments.directional_deviation.anomalies` **(new module recommended)**
+
+Provide two generators:
+
+#### Coordinate anomalies (existing behavior)
+
+```python
+def iter_coordinate_anomalies(
+    base_x: Tensor,  # e.g., x_test_normal
+    mode: Literal["single_channel","subset"],
+    delta: float,
+    ...
+) -> Iterator[Batch]:
     ...
 ```
 
-Normal samples:
-- Train/val/test-normal splits are drawn IID from \(\mathcal{N}(0, I)\) componentwise.
-- If `normal_mode="heteroskedastic_normal"`, draw IID per-channel with \(x_j \sim \mathcal{N}(0, \sigma_j^2)\) using `channel_stds`, and persist `channel_stds` in `generator_config.json` to make symmetry-breaking explicit.
+- `single_channel`: for each channel `j`, create `num_test_*_per_channel` samples by selecting base samples and shifting
+  coordinate `j` by `±Δ`.
+- `subset`: shift a fixed subset mask (deterministically constructed from seed or provided explicitly) by `±Δ`.
 
-Anomaly samples:
-- For each evaluated channel \(j\) (or each evaluated subset pattern), generate:
-  - high anomalies: \(x = x_{\text{base}} + \Delta \cdot m\)
-  - low anomalies: \(x = x_{\text{base}} - \Delta \cdot m\)
-  where \(m\) is:
-  - `single_channel`: the standard basis vector \(e_j\),
-  - `subset`: a binary mask with exactly `subset_size` ones (chosen deterministically from the seed, or provided explicitly).
-- If `anomaly_eval_mode="stream"`, the system may avoid materializing a full `x_test_anomaly` tensor; instead it SHALL provide a memory-safe iterable/batched interface for scoring and evaluation while still producing deterministic labels and an `anomaly_manifest.json`.
+#### Feature-direction anomalies (new)
 
-Labels:
-- `labels_type: Tensor[int]` with values `{0=normal, 1=high, 2=low}`
-- `labels_channel: Tensor[int]` with the affected channel index (or `-1` for subset anomalies if not attributable to a single channel)
-- `labels_mask: Optional[Tensor]` (for subset mode), to record the exact shifted coordinates
+```python
+def build_feature_directions(
+    reference_model,  # trained model
+    config: DirectionalDeviationAnomalyConfig,
+    device: str,
+) -> tuple[Tensor, dict]:  # directions (M,N), manifest dict
+    ...
+```
 
-Exports:
-- Mirror `polarity_dial.export_data_summary` with:
-  - `generator_config.json`,
-  - `sampled_data.pt`,
-  - `anomaly_manifest.json` describing channel selection, subset rules, and counts.
+Direction extraction (`reference_model_decoder`):
+- take decoder matrix `D` of shape `(N, H)`
+- compute per-latent purity: `purity[i] = max_j |D[j,i]| / ||D[:,i]||_2`
+- if `direction_selection="top_pi_std"`, compute the reference model's detection signal π on `base_samples` normals and select the top-`M` latents by `std(π_i)` (ties broken by latent index).
+- if `direction_selection="top_weight_norm"`, select the top-`M` latents by the L2 norm of the raw decoder columns before normalization.
+- select `M` latents by:
+  - `top_purity`: top-M by purity (ties broken deterministically)
+  - `top_pi_std`: top-M by std(π) on base samples (ties broken deterministically)
+  - `top_weight_norm`: top-M by ||D[:,i]||_2 before normalization (ties broken deterministically)
+  - `random`: random sample without replacement (seeded)
+  - `explicit`: use `direction_latent_indices`
+- directions are `v_k = D[:, latent_idx_k]`
+- if `normalize_directions`, normalize each `v_k` to unit norm
 
-### Training and Model Orchestration
+Direction strength control:
+- if `direction_delta_mode="fixed_input"`, use the global Δ from config.
+- if `direction_delta_mode="fixed_pi_shift"`, compute per-direction input deltas Δ_k so the *reference* latent receives an approximately fixed first-order shift ∣Δπ∣=Δ:
+  - let `w_k` be the raw direction vector (decoder column for the selected latent),
+  - let `v_k = w_k / ||w_k||`,
+  - set `Δ_k = Δ / (||w_k|| + ε)` and generate `x' = x ± Δ_k v_k`,
+  - optionally clamp Δ_k by `max_direction_input_delta` and record any clipping in the manifest.
+
+Then generate anomalies by perturbing base samples:
+
+```python
+def iter_feature_direction_anomalies(
+    base_x: Tensor,
+    directions: Tensor,  # (M, N) unit vectors
+    delta: float,
+    direction_input_deltas: Tensor | None,
+    num_high_per_direction: int,
+    num_low_per_direction: int,
+    ...
+) -> Iterator[Batch]:
+    # yields (x_batch, labels_type, labels_target)
+```
+
+Labeling:
+- `labels_target = direction_index k`
+- `labels_type = 1` for +Δ, `2` for -Δ
+
+Artifacts:
+- write `data/anomaly_directions.pt` and `data/anomaly_manifest.json` in the **run root** (shared across models),
+  because all models should evaluate on the same anomaly dataset when `direction_source="reference_model_decoder"`.
+
+Ordering constraint:
+- Ensure the reference model is trained before `build_feature_directions` runs.
+
+---
+
+### 4) Training and orchestration
 
 Module: `sgnsae.experiments.directional_deviation.training`
 
-Training should mirror the `polarity_dial.training.run_training_for_variant` interface:
-- use `TensorDataset` / `DataLoader`,
-- track epoch-level `loss_total`, `loss_reconstruction`, `loss_sparsity` (and `loss_aux` for gated),
-- persist `model.pt`, `model_config.json`, `training_metrics.json` under `models/<model_name>/`.
+No major changes. However, for `feature_direction` anomalies with `direction_source="reference_model_decoder"`:
+- the runner MUST train `reference_model_name` first (or at least before anomaly directions are built).
 
-Default training regime:
-- Train on normal-only `x_train`.
+A simple approach:
+- Train all models, but if directions are needed, train the reference model first in the loop.
 
-Optional (configurable) alternative:
-- Train on a mixture of normal/anomaly data to test robustness (must be explicitly configured and logged).
+---
 
-### Detection Signal Extraction
+### 5) Detection signal extraction and scoring
 
 Module: `sgnsae.experiments.directional_deviation.scoring`
 
-To support multiple model types, define a single interface:
+#### Detection signal
 
-- `extract_detection_signal(model, x) -> Tensor` returning a tensor of shape `(batch, d_hidden)` that is used as \(\pi(x)\) in Protocol B’s score definitions.
+Keep the existing abstraction:
 
-Concrete extraction rules:
-- For `GatedSAE`: run `output = model(x)` and use `pi = output["pi_gate"][0]`.
-- For `SAE`: compute the encoder pre-activations directly from model parameters (matching `SAE.forward` prior to the nonlinearity) and use that as `pi`.
+- `pi(x)`: signed detection signal (pre-activation) of shape `(batch, H)`
+- `e(x)`: non-negative evidence for baseline models of shape `(batch, H)`
 
-This keeps the scoring pipeline model-agnostic while preserving the Protocol B intent (“use the detection signal before magnitude estimation”).
+Rules:
+- GatedSAE: use `output["pi_gate"][0]` as `pi`
+- SAE: use encoder pre-activations as `pi`
+- Baseline evidence `e` MUST be non-negative (e.g., post-nonlinearity activations) to avoid two-sided leakage.
 
-#### Important note on baseline scoring (to avoid “two-sided evidence” leakage)
+#### Thresholds (unchanged conceptually)
 
-For baseline models with non-negative latents (e.g., ReLU SAE, standard gated SAE), using raw signed pre-activations as \(\pi(x)\) and then scoring both tails (via \(\pi\) and \(-\pi\)) would incorrectly grant a single latent access to both directions of deviation. This would invalidate Protocol B’s intended capacity comparison.
+Optional signal normalization (5E):
+- extract the raw detection signal on validation normals (π for sign-aware, evidence for baselines),
+- if `signal_normalization="zscore"`, fit per-latent (μ,σ) on validation normals and transform to z-scores,
+- compute τ/η and downstream scores in the normalized space,
+- persist normalization stats alongside thresholds.
 
-Therefore, the implementation SHALL support two scoring modes:
+- Sign-aware thresholds:
+  - `tau_plus[i] = quantile_q(pi[:,i])`
+  - `tau_minus[i] = quantile_q(-pi[:,i])`
+- Baseline thresholds:
+  - `eta[i] = quantile_q(e[:,i])`
 
-- **Sign-Aware mode:** uses the signed gate pre-activations \(\pi(x)\) and the two-tailed scoring in Protocol B.
-- **Baseline mode:** uses a one-sided evidence signal (e.g., post-nonlinearity activations) and computes “high” vs “low” scores by assigning latents to directions based on decoder geometry (see below).
+#### Pooling modes (new)
 
-### Threshold Calibration and Scores
+Implement a helper:
 
-Module: `sgnsae.experiments.directional_deviation.scoring`
+```python
+def pool_exceedances(z: Tensor, mode: str, topk_k: int | None) -> Tensor:
+    # z is non-negative exceedance per-latent, shape (batch, H)
+    # returns pooled score shape (batch,)
+```
 
-Per-latent thresholds:
-- Given normal validation detection signals \(\pi(x)\) of shape `(num_val, H)`:
-  - \(\tau_i^+ = \text{quantile}_{q}(\pi_i(x))\)
-  - \(\tau_i^- = \text{quantile}_{q}(-\pi_i(x))\)
-  with default `q = 0.99`.
+- `sum`: `z.sum(dim=-1)`
+- `max`: `z.max(dim=-1).values`
+- `topk`: `z.topk(k=topk_k, dim=-1).values.sum(dim=-1)`
 
-Directional scores (per sample):
-- \(\text{Score}_{\text{high}}(x) = \sum_i \text{ReLU}(\pi_i(x) - \tau_i^+)\)
-- \(\text{Score}_{\text{low}}(x)  = \sum_i \text{ReLU}(-\pi_i(x) - \tau_i^-)\)
+Apply this helper in BOTH:
+- sign-aware scoring (high/low exceedances from `pi`)
+- baseline scoring (high/low exceedances from `e` after partitioning)
 
-Score thresholds for fixed FPR:
-- Using the normal validation set scores:
-  - choose `theta_high` such that `P(Score_high > theta_high) = score_fpr`,
-  - choose `theta_low` such that `P(Score_low > theta_low) = score_fpr`.
+#### Target-restricted scoring (optional)
 
-Artifacts:
-- Persist `tau_plus.pt`, `tau_minus.pt` (CPU tensors),
-- Persist `score_thresholds.json` with `theta_high`, `theta_low`, and the quantile configuration.
+When `target_restricted_scoring=true` AND `shift_mode="single_channel"`:
+- precompute `latent_argmax_channel[i] = argmax_j |D[j,i]|`
+- score for channel `j` uses only latents where `latent_argmax_channel[i] == j`
+- if no latents for `j`, score = 0
 
-#### Baseline directional scoring (one-sided evidence + decoder-based direction assignment)
+This is intended for diagnostics and for more faithful “localized anomaly” evaluation.
 
-For baseline models, define a non-negative evidence signal \(e_i(x)\) (shape `(batch, H)`), e.g.:
+---
 
-- ReLU SAE: \(e(x)\) is the post-ReLU latent activation.
-- Standard Gated SAE: \(e(x)\) is the model’s non-negative latent activation (or an explicitly one-sided gate/evidence output).
-
-Compute per-latent evidence thresholds from normal validation data:
-
-- \(\eta_i = \text{quantile}_{q}(e_i(x))\)
-
-Assign each latent \(i\) to a direction using the decoder dictionary:
-
-- `single_channel`: let \(j_i = \arg\max_j |D_{j,i}|\) and `dir_i = sign(D_{j_i,i})` (ties broken deterministically).
-- `subset`: let \(m\) be the fixed subset mask vector and set `dir_i = sign(D_{:,i}^\top m)`.
-
-Then compute baseline directional scores as:
-
-- \(\text{Score}_{\text{high}}(x) = \sum_{i: \text{dir}_i = +1} \text{ReLU}(e_i(x) - \eta_i)\)
-- \(\text{Score}_{\text{low}}(x)  = \sum_{i: \text{dir}_i = -1} \text{ReLU}(e_i(x) - \eta_i)\)
-
-This ensures a baseline needs distinct latents aligned with both directions to cover both “high” and “low” deviations.
-
-### Evaluation
+### 6) Evaluation and diagnostics
 
 Module: `sgnsae.experiments.directional_deviation.evaluation`
 
-Directional Recall @ Fixed FPR:
-- On a labeled test set containing normal, high, and low anomalies:
-  - `recall_high = mean(Score_high(x) > theta_high | label=high)`
-  - `recall_low = mean(Score_low(x) > theta_low | label=low)`
-- Also report achieved FPR on a held-out normal test-normal set as a sanity check.
-- If `anomaly_eval_mode="stream"`, scoring/evaluation SHALL iterate in batches over anomalies to avoid materializing all samples at once.
+Required outputs (per model):
+- `recall_high`, `recall_low` at fixed FPR (calibrated on validation normals)
+- achieved FPR on `x_test_normal`
+- per-target recall arrays:
+  - `recall_high_by_target`
+  - `recall_low_by_target`
+- coverage:
+  - `covered_targets = count_k(recall_high_by_target[k] >= target && recall_low_by_target[k] >= target)`
+  - `coverage_fraction = covered_targets / num_targets`
 
-Optional per-channel metrics (for `shift_mode="single_channel"`):
-- For each channel `j`, compute recall separately:
-  - `recall_high_by_channel[j]`
-  - `recall_low_by_channel[j]`
-- Compute a “both-directions covered” statistic:
-  - `covered_channels = count_j( recall_high_by_channel[j] >= target and recall_low_by_channel[j] >= target )`
-  - with `target` configurable (default: `0.8`).
+Target kind:
+- Coordinate anomalies: `target_kind="channel"`, `num_targets = N`
+- Feature-direction anomalies: `target_kind="direction"`, `num_targets = M`
 
-Comparison artifacts:
-- For each width \(H\), produce a `metrics.json` per model variant.
-- For width sweeps, collate:
-  - `comparison_summary.json` at the run root with recall/coverage as a function of \(H\).
+Diagnostics (5D):
+- compute decoder alignment metrics from `D`:
+  - `latent_argmax_channel[i]`
+  - `latent_purity[i]`
+  - `unique_channels_claimed`
+  - summary stats (mean/median/p10/p90)
+- write `models/<model_name>/decoder_alignment.json`
+- include alignment summary in `models/<model_name>/evaluation.json` and in run-root `comparison_summary.json`
 
-### Plotting
+---
+
+### 7) Plotting
 
 Module: `sgnsae.experiments.directional_deviation.plotting`
 
-Plots should stay minimal and deterministic:
-- `recall_vs_width.png` (two curves per model: high recall, low recall),
-- `coverage_vs_width.png` (if per-channel evaluation enabled),
-- `score_histograms.png` showing score distributions for normal vs anomalies for each direction.
+Existing plots (keep):
+- `recall_vs_width.png` (high + low curves per model)
+- `coverage_vs_width.png` (if enabled)
+- `score_histograms.png`
 
-## Data Models
+New plots (5D + 5C):
+- `decoder_purity_hist.png` per model (or combined)
+- `unique_channels_vs_width.png` for width sweeps
+- (Optional) `recall_by_target_hist.png` to visualize per-target variability
 
-All persistent artifacts are JSON and Torch tensors:
+All plots must be deterministic and saved under `<run_dir>/plots/`.
 
-Per run root:
+---
+
+## Artifacts (Updated)
+
+Run root:
 - `config.json`
-- `data/`:
-  - `generator_config.json`
-  - `anomaly_manifest.json`
-  - `sampled_data.pt`
-- `models/<model_name>/`:
-  - `model.pt`
-  - `model_config.json`
-  - `training_metrics.json`
-  - `thresholds/`:
-    - `tau_plus.pt` (Sign-Aware only; calibrated on \(\pi\))
-    - `tau_minus.pt` (Sign-Aware only; calibrated on \(-\pi\))
-    - `evidence_tau.pt` (Baseline only; calibrated on baseline evidence signal \(e\), if applicable)
-    - `score_thresholds.json`
-  - `evaluation.json` (directional recall, optional per-channel stats)
-  - plots (`.png`)
-- `comparison_summary.json` (if multiple models and/or widths)
+- `comparison_summary.json`
+- `plots/`
 
-## Error Handling
+Data:
+- `data/generator_config.json`
+- `data/anomaly_manifest.json`
+- `data/anomaly_directions.pt` (only for `feature_direction`)
+- `data/sampled_data.pt`
 
-The implementation should fail fast with explicit messages for:
-- Invalid config values (negative sizes, invalid probabilities/quantiles/FPR).
-- Unsupported combinations (e.g., `symmetric_magnitude=True` with `sign_aware=False`).
-- Insufficient validation samples to estimate stable quantiles (`min_validation_samples`).
-- Missing expected model outputs (e.g., `GatedSAE` missing `pi_gate`).
-- Shape mismatches (e.g., thresholds computed for one width used with another).
+Per model:
+- `models/<model_name>/model.pt`
+- `models/<model_name>/training_metrics.json`
+- `models/<model_name>/thresholds/*`
+  - include `signal_normalization.(pt|json)` when enabled
+- `models/<model_name>/evaluation.json`
+- `models/<model_name>/decoder_alignment.json`
+- `models/<model_name>/plots/*.png`
 
-For runtime evaluation issues (e.g., NaNs, empty anomaly sets), write partial artifacts when safe:
-- always persist `config.json`,
-- persist `training_metrics.json` even if training terminates early,
-- write `evaluation.json` with `null` fields if scoring/calibration cannot be completed.
+---
 
-## Testing Strategy
+## Testing Strategy (Updated)
 
-Tests use `unittest` and follow `# given # when # then`.
+High-value unit tests:
 
-Recommended coverage targets:
-- Data generation correctness and determinism.
-- Scoring/calibration math and quantile behavior.
-- Metric computations for recall/FPR, including edge cases.
-
-Suggested unit tests (high value):
-1. Data generator determinism: same seed reproduces identical tensors for normal and anomaly sets.
-2. Anomaly correctness:
-   - in `single_channel` mode, confirm exactly one coordinate is shifted by \(\pm\Delta\),
-   - in `subset` mode, confirm exactly `subset_size` coordinates are shifted.
-3. Threshold calibration:
-   - on a small fixed tensor, confirm quantile thresholds match expected values.
-4. Directional scoring:
-   - confirm `Score_high` is zero when `pi <= tau_plus` elementwise and increases linearly above it,
-   - confirm `Score_low` mirrors the behavior for negative tail.
-5. Evaluation metrics:
-   - construct a synthetic case where anomalies are guaranteed to exceed thresholds and assert recall \(=1.0\),
-   - confirm fixed-FPR thresholding achieves target FPR within tolerance on sufficiently large samples.
-6. Baseline leakage prevention:
-   - construct a toy case where a single baseline latent has signed pre-activations but non-negative post-activations, and assert that baseline-mode scoring does NOT achieve simultaneous high+low detection from that single latent.
+1. **Symmetry-breaking generators**:
+   - determinism by seed,
+   - variance sanity checks for each normal_mode.
+2. **Feature-direction anomalies**:
+   - direction selection determinism (`top_purity`, `top_pi_std`, `random`),
+   - perturbation equals `±Δ v_k` for `fixed_input` (within float tolerance),
+   - perturbation equals `±Δ_k v_k` and Δ_k is recorded for `fixed_pi_shift`.
+3. **Pooling modes**:
+   - `sum`, `max`, `topk` correctness on toy tensors.
+4. **Signal normalization**:
+   - z-score transform produces mean≈0 and std≈1 (within tolerance) on a fixed tensor,
+   - end-to-end threshold calibration produces finite τ/η/θ when enabled.
+5. **Target-restricted scoring**:
+   - score is 0 when no latents map to a channel,
+   - uses only mapped latents otherwise.
+6. **Decoder alignment diagnostics**:
+   - purity=1 for one-hot columns,
+   - expected purity for uniform columns.

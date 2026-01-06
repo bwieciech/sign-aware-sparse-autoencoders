@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -6,11 +7,16 @@ from typing import Any, Dict, List
 
 import torch
 
+import sgnsae.experiments.directional_deviation.scoring as scoring_module
 from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
+    calculate_latent_argmax_channel,
     assign_baseline_latent_directions,
+    build_zscore_normalization_metadata,
     build_threshold_metadata,
     calibrate_baseline_evidence_thresholds,
     calibrate_score_thresholds,
@@ -19,6 +25,7 @@ from sgnsae.experiments.directional_deviation.scoring import (
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
+    fit_zscore_normalization_stats,
     persist_baseline_threshold_artifacts,
     persist_sign_aware_threshold_artifacts,
 )
@@ -497,6 +504,248 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
         )
         self.assertTrue(torch.equal(thresholds.latent_directions, latent_directions))
 
+    def test_zscore_normalization_produces_zero_mean_and_unit_std_per_latent(
+        self,
+    ) -> None:
+        # given
+        signal = torch.tensor(
+            [[0.0, 1.0], [2.0, 3.0], [4.0, 5.0], [6.0, 7.0]],
+            dtype=torch.float32,
+        )
+
+        # when
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+        normalized = apply_zscore_normalization(signal, stats=stats)
+
+        # then
+        mean = normalized.mean(dim=0)
+        std = normalized.std(dim=0, unbiased=False)
+        self.assertTrue(
+            torch.allclose(mean, torch.zeros(2, dtype=torch.float32), atol=1e-6)
+        )
+        self.assertTrue(
+            torch.allclose(std, torch.ones(2, dtype=torch.float32), atol=1e-6)
+        )
+        self.assertTrue(
+            torch.equal(stats.clamped_mask, torch.zeros(2, dtype=torch.bool))
+        )
+
+    def test_fit_zscore_normalization_stats_raises_for_invalid_eps(self) -> None:
+        # given
+        signal = torch.zeros((2, 2), dtype=torch.float32)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = fit_zscore_normalization_stats(signal=signal, normalization_eps=0.0)
+
+    def test_fit_zscore_normalization_stats_raises_for_non_finite_mean(self) -> None:
+        # given
+        signal = torch.tensor(
+            [[float("nan"), 0.0], [0.0, 1.0]],
+            dtype=torch.float32,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+
+    def test_fit_zscore_normalization_stats_raises_for_non_finite_signal(self) -> None:
+        # given
+        signal = torch.tensor(
+            [[0.0, float("inf")], [1.0, 2.0]],
+            dtype=torch.float32,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+
+    def test_apply_zscore_normalization_raises_for_shape_mismatch(self) -> None:
+        # given
+        signal = torch.zeros((2, 2), dtype=torch.float32)
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+        invalid_signal = torch.zeros((2, 3), dtype=torch.float32)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = apply_zscore_normalization(invalid_signal, stats=stats)
+
+    def test_apply_zscore_normalization_raises_for_std_shape_mismatch(self) -> None:
+        # given
+        signal = torch.zeros((2, 3), dtype=torch.float32)
+        stats = ZScoreNormalizationStats(
+            mean=torch.zeros(3, dtype=torch.float32),
+            std=torch.zeros(2, dtype=torch.float32),
+            eps=1e-8,
+            clamped_mask=torch.zeros(2, dtype=torch.bool),
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = apply_zscore_normalization(signal, stats=stats)
+
+    def test_build_zscore_normalization_metadata_records_clamped_latents(
+        self,
+    ) -> None:
+        # given
+        signal = torch.tensor(
+            [[1.0, 0.0], [1.0, 2.0], [1.0, 4.0]],
+            dtype=torch.float32,
+        )
+
+        # when
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=0.5)
+        metadata = build_zscore_normalization_metadata(stats)
+
+        # then
+        self.assertEqual(metadata["mode"], "zscore")
+        self.assertEqual(metadata["normalization_eps"], 0.5)
+        self.assertEqual(metadata["clamped_latent_indices"], [0])
+
+    def test_build_threshold_metadata_rejects_missing_or_unexpected_zscore_stats(
+        self,
+    ) -> None:
+        # given
+        model = self._make_sae(sign_aware=False, single_activation_offset=False)
+        score_thresholds = ScoreThresholds(
+            theta_high=1.0,
+            theta_low=2.0,
+            score_fpr=0.01,
+            score_quantile=0.99,
+        )
+        signal = torch.randn((4, 2))
+        stats = fit_zscore_normalization_stats(signal=signal, normalization_eps=1e-8)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="zscore",
+                signal_normalization_stats=None,
+            )
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="none",
+                signal_normalization_stats=stats,
+            )
+
+    def test_build_threshold_metadata_rejects_invalid_signal_normalization_and_eps(
+        self,
+    ) -> None:
+        # given
+        model = self._make_sae(sign_aware=False, single_activation_offset=False)
+        score_thresholds = ScoreThresholds(
+            theta_high=1.0,
+            theta_low=2.0,
+            score_fpr=0.01,
+            score_quantile=0.99,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(  # type: ignore[arg-type]
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="invalid",
+            )
+        with self.assertRaises(ValueError):
+            _ = build_threshold_metadata(
+                model=model,
+                scoring_mode="sign_aware",
+                latent_quantile=0.99,
+                score_thresholds=score_thresholds,
+                shift_mode="single_channel",
+                signal_normalization="none",
+                normalization_eps=0.0,
+            )
+
+    def test_zscore_normalization_enables_end_to_end_sign_aware_calibration(
+        self,
+    ) -> None:
+        # given
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(0)
+        pi_val_raw = torch.randn((200, 4), generator=generator) * 2.0 + 3.0
+
+        # when
+        stats = fit_zscore_normalization_stats(
+            signal=pi_val_raw, normalization_eps=1e-6
+        )
+        pi_val = apply_zscore_normalization(pi_val_raw, stats=stats)
+        latent_thresholds = calibrate_sign_aware_latent_thresholds(
+            pi_validation=pi_val,
+            latent_quantile=0.99,
+            min_validation_samples=10,
+        )
+        score_high_val, score_low_val = calculate_sign_aware_directional_scores(
+            pi=pi_val,
+            latent_thresholds=latent_thresholds,
+            pooling="sum",
+        )
+        score_thresholds = calibrate_score_thresholds(
+            score_high_validation=score_high_val,
+            score_low_validation=score_low_val,
+            score_fpr=0.05,
+            min_validation_samples=10,
+        )
+
+        # then
+        self.assertTrue(torch.all(torch.isfinite(latent_thresholds.tau_plus)).item())
+        self.assertTrue(torch.all(torch.isfinite(latent_thresholds.tau_minus)).item())
+        self.assertTrue(math.isfinite(score_thresholds.theta_high))
+        self.assertTrue(math.isfinite(score_thresholds.theta_low))
+
+    def test_zscore_normalization_enables_end_to_end_baseline_calibration(
+        self,
+    ) -> None:
+        # given
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(1)
+        evidence_val_raw = torch.relu(torch.randn((200, 4), generator=generator) + 0.5)
+        latent_directions = torch.tensor([1, -1, 1, -1], dtype=torch.int64)
+
+        # when
+        stats = fit_zscore_normalization_stats(
+            signal=evidence_val_raw, normalization_eps=1e-6
+        )
+        evidence_val = apply_zscore_normalization(evidence_val_raw, stats=stats)
+        baseline_thresholds = calibrate_baseline_evidence_thresholds(
+            evidence_validation=evidence_val,
+            latent_directions=latent_directions,
+            latent_quantile=0.99,
+            min_validation_samples=10,
+        )
+        score_high_val, score_low_val = calculate_baseline_directional_scores(
+            one_sided_evidence=evidence_val,
+            baseline_thresholds=baseline_thresholds,
+            pooling="sum",
+        )
+        score_thresholds = calibrate_score_thresholds(
+            score_high_validation=score_high_val,
+            score_low_validation=score_low_val,
+            score_fpr=0.05,
+            min_validation_samples=10,
+        )
+
+        # then
+        self.assertTrue(
+            torch.all(torch.isfinite(baseline_thresholds.evidence_tau)).item()
+        )
+        self.assertTrue(math.isfinite(score_thresholds.theta_high))
+        self.assertTrue(math.isfinite(score_thresholds.theta_low))
+
     def test_calibrate_baseline_evidence_thresholds_raises_for_direction_length_mismatch(
         self,
     ) -> None:
@@ -529,6 +778,346 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
         # then
         self.assertTrue(torch.allclose(score_high, torch.tensor([2.3, 0.0]), atol=1e-7))
         self.assertTrue(torch.allclose(score_low, torch.tensor([0.0, 1.7]), atol=1e-7))
+
+    def test_calculate_sign_aware_directional_scores_respects_pooling_modes(
+        self,
+    ) -> None:
+        # given
+        pi = torch.tensor([[3.0, -1.0, 2.0]], dtype=torch.float32)
+        thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(3, dtype=torch.float32),
+            tau_minus=torch.zeros(3, dtype=torch.float32),
+        )
+
+        # when
+        score_high_sum, score_low_sum = calculate_sign_aware_directional_scores(
+            pi=pi,
+            latent_thresholds=thresholds,
+            pooling="sum",
+        )
+        score_high_max, score_low_max = calculate_sign_aware_directional_scores(
+            pi=pi,
+            latent_thresholds=thresholds,
+            pooling="max",
+        )
+        score_high_topk, score_low_topk = calculate_sign_aware_directional_scores(
+            pi=pi,
+            latent_thresholds=thresholds,
+            pooling="topk",
+            topk_k=2,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high_sum, torch.tensor([5.0])))
+        self.assertTrue(torch.allclose(score_low_sum, torch.tensor([1.0])))
+        self.assertTrue(torch.allclose(score_high_max, torch.tensor([3.0])))
+        self.assertTrue(torch.allclose(score_low_max, torch.tensor([1.0])))
+        self.assertTrue(torch.allclose(score_high_topk, torch.tensor([5.0])))
+        self.assertTrue(torch.allclose(score_low_topk, torch.tensor([1.0])))
+
+    def test_calculate_baseline_directional_scores_respects_pooling_modes(self) -> None:
+        # given
+        evidence = torch.tensor([[2.0, 0.5, 4.0]], dtype=torch.float32)
+        thresholds = BaselineEvidenceThresholds(
+            evidence_tau=torch.tensor([1.0, 1.0, 1.0], dtype=torch.float32),
+            latent_directions=torch.tensor([1, -1, 1], dtype=torch.int64),
+        )
+
+        # when
+        score_high_sum, score_low_sum = calculate_baseline_directional_scores(
+            evidence,
+            thresholds,
+            pooling="sum",
+        )
+        score_high_max, score_low_max = calculate_baseline_directional_scores(
+            evidence,
+            thresholds,
+            pooling="max",
+        )
+        score_high_topk, score_low_topk = calculate_baseline_directional_scores(
+            evidence,
+            thresholds,
+            pooling="topk",
+            topk_k=2,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high_sum, torch.tensor([4.0])))
+        self.assertTrue(torch.allclose(score_low_sum, torch.tensor([0.0])))
+        self.assertTrue(torch.allclose(score_high_max, torch.tensor([3.0])))
+        self.assertTrue(torch.allclose(score_low_max, torch.tensor([0.0])))
+        self.assertTrue(torch.allclose(score_high_topk, torch.tensor([4.0])))
+        self.assertTrue(torch.allclose(score_low_topk, torch.tensor([0.0])))
+
+    def test_calculate_sign_aware_directional_scores_target_restricted_uses_only_mapped_latents(
+        self,
+    ) -> None:
+        # given
+        pi = torch.tensor(
+            [
+                [0.0, 10.0, 0.0],
+                [5.0, 10.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(3, dtype=torch.float32),
+            tau_minus=torch.zeros(3, dtype=torch.float32),
+        )
+        latent_argmax_channel = torch.tensor([0, 1, 0], dtype=torch.int64)
+        targets = torch.tensor([0, 0], dtype=torch.int64)
+
+        # when
+        score_high, score_low = calculate_sign_aware_directional_scores(
+            pi=pi,
+            latent_thresholds=thresholds,
+            pooling="sum",
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high, torch.tensor([0.0, 5.0])))
+        self.assertTrue(torch.allclose(score_low, torch.tensor([0.0, 0.0])))
+
+    def test_calculate_baseline_directional_scores_target_restricted_uses_only_mapped_latents(
+        self,
+    ) -> None:
+        # given
+        evidence = torch.tensor(
+            [
+                [0.0, 10.0, 0.0],
+                [5.0, 10.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        thresholds = BaselineEvidenceThresholds(
+            evidence_tau=torch.zeros(3, dtype=torch.float32),
+            latent_directions=torch.tensor([1, 1, 1], dtype=torch.int64),
+        )
+        latent_argmax_channel = torch.tensor([0, 1, 0], dtype=torch.int64)
+        targets = torch.tensor([0, 0], dtype=torch.int64)
+
+        # when
+        score_high, score_low = calculate_baseline_directional_scores(
+            evidence,
+            thresholds,
+            pooling="sum",
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high, torch.tensor([0.0, 5.0])))
+        self.assertTrue(torch.allclose(score_low, torch.tensor([0.0, 0.0])))
+
+    def test_target_restricted_scoring_returns_zero_when_target_has_no_latents(
+        self,
+    ) -> None:
+        # given
+        pi = torch.tensor([[3.0, 4.0]], dtype=torch.float32)
+        thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(2, dtype=torch.float32),
+            tau_minus=torch.zeros(2, dtype=torch.float32),
+        )
+        latent_argmax_channel = torch.tensor([0, 0], dtype=torch.int64)
+        targets = torch.tensor([1], dtype=torch.int64)
+
+        # when
+        score_high, score_low = calculate_sign_aware_directional_scores(
+            pi=pi,
+            latent_thresholds=thresholds,
+            pooling="max",
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
+        )
+
+        # then
+        self.assertTrue(torch.allclose(score_high, torch.tensor([0.0])))
+        self.assertTrue(torch.allclose(score_low, torch.tensor([0.0])))
+
+    def test_calculate_sign_aware_directional_scores_raises_when_only_one_restriction_argument_provided(
+        self,
+    ) -> None:
+        # given
+        pi = torch.zeros((2, 2), dtype=torch.float32)
+        thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(2, dtype=torch.float32),
+            tau_minus=torch.zeros(2, dtype=torch.float32),
+        )
+        targets = torch.zeros(2, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(2, dtype=torch.int64)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = calculate_sign_aware_directional_scores(
+                pi=pi,
+                latent_thresholds=thresholds,
+                targets=targets,
+                latent_argmax_channel=None,
+            )
+        with self.assertRaises(ValueError):
+            _ = calculate_sign_aware_directional_scores(
+                pi=pi,
+                latent_thresholds=thresholds,
+                targets=None,
+                latent_argmax_channel=latent_argmax_channel,
+            )
+
+    def test_calculate_baseline_directional_scores_raises_when_only_one_restriction_argument_provided(
+        self,
+    ) -> None:
+        # given
+        evidence = torch.zeros((2, 2), dtype=torch.float32)
+        thresholds = BaselineEvidenceThresholds(
+            evidence_tau=torch.zeros(2, dtype=torch.float32),
+            latent_directions=torch.tensor([1, 1], dtype=torch.int64),
+        )
+        targets = torch.zeros(2, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(2, dtype=torch.int64)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = calculate_baseline_directional_scores(
+                evidence,
+                thresholds,
+                targets=targets,
+                latent_argmax_channel=None,
+            )
+        with self.assertRaises(ValueError):
+            _ = calculate_baseline_directional_scores(
+                evidence,
+                thresholds,
+                targets=None,
+                latent_argmax_channel=latent_argmax_channel,
+            )
+
+    def test_calculate_baseline_directional_scores_raises_for_invalid_latent_directions_ndim_in_restricted_mode(
+        self,
+    ) -> None:
+        # given
+        evidence = torch.zeros((2, 2), dtype=torch.float32)
+        thresholds = BaselineEvidenceThresholds(
+            evidence_tau=torch.zeros(2, dtype=torch.float32),
+            latent_directions=torch.ones((1, 2), dtype=torch.int64),
+        )
+        targets = torch.zeros(2, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(2, dtype=torch.int64)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = calculate_baseline_directional_scores(
+                evidence,
+                thresholds,
+                targets=targets,
+                latent_argmax_channel=latent_argmax_channel,
+            )
+
+    def test_calculate_baseline_directional_scores_raises_for_latent_directions_length_mismatch_in_restricted_mode(
+        self,
+    ) -> None:
+        # given
+        evidence = torch.zeros((2, 2), dtype=torch.float32)
+        thresholds = BaselineEvidenceThresholds(
+            evidence_tau=torch.zeros(2, dtype=torch.float32),
+            latent_directions=torch.tensor([1, 1, 1], dtype=torch.int64),
+        )
+        targets = torch.zeros(2, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(2, dtype=torch.int64)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = calculate_baseline_directional_scores(
+                evidence,
+                thresholds,
+                targets=targets,
+                latent_argmax_channel=latent_argmax_channel,
+            )
+
+    def test_calculate_latent_argmax_channel_returns_expected_indices(self) -> None:
+        # given
+        model = SAE(
+            n_instances=1,
+            d_in=3,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            sign_aware=False,
+            device=self.device,
+        )
+        with torch.no_grad():
+            model.W_dec[0] = torch.tensor(
+                [[0.1, 0.0], [0.0, -2.0], [0.0, 0.5]], dtype=torch.float32
+            )
+
+        # when
+        latent_argmax = calculate_latent_argmax_channel(model)
+
+        # then
+        self.assertTrue(
+            torch.equal(latent_argmax, torch.tensor([0, 1], dtype=torch.int64))
+        )
+
+    def test_calculate_sign_aware_directional_scores_raises_for_target_shape_mismatch(
+        self,
+    ) -> None:
+        # given
+        pi = torch.zeros((2, 2), dtype=torch.float32)
+        thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(2, dtype=torch.float32),
+            tau_minus=torch.zeros(2, dtype=torch.float32),
+        )
+        targets = torch.zeros(1, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(2, dtype=torch.int64)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = calculate_sign_aware_directional_scores(
+                pi=pi,
+                latent_thresholds=thresholds,
+                targets=targets,
+                latent_argmax_channel=latent_argmax_channel,
+            )
+
+    def test_calculate_sign_aware_directional_scores_raises_for_latent_argmax_length_mismatch(
+        self,
+    ) -> None:
+        # given
+        pi = torch.zeros((1, 2), dtype=torch.float32)
+        thresholds = SignAwareLatentThresholds(
+            tau_plus=torch.zeros(2, dtype=torch.float32),
+            tau_minus=torch.zeros(2, dtype=torch.float32),
+        )
+        targets = torch.zeros(1, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(3, dtype=torch.int64)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = calculate_sign_aware_directional_scores(
+                pi=pi,
+                latent_thresholds=thresholds,
+                targets=targets,
+                latent_argmax_channel=latent_argmax_channel,
+            )
+
+    def test_pool_exceedances_by_target_raises_for_latent_filter_mask_length_mismatch(
+        self,
+    ) -> None:
+        # given
+        exceedances = torch.zeros((1, 2), dtype=torch.float32)
+        targets = torch.zeros(1, dtype=torch.int64)
+        latent_argmax_channel = torch.zeros(2, dtype=torch.int64)
+        latent_filter_mask = torch.ones(3, dtype=torch.bool)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = scoring_module._pool_exceedances_by_target(
+                exceedances=exceedances,
+                targets=targets,
+                latent_argmax_channel=latent_argmax_channel,
+                pooling="sum",
+                topk_k=None,
+                latent_filter_mask=latent_filter_mask,
+            )
 
     def test_calculate_sign_aware_directional_scores_raises_for_width_mismatch(
         self,
@@ -948,6 +1537,9 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
                 os.path.exists(os.path.join(baseline_dir, "evidence_tau.pt"))
             )
             self.assertTrue(
+                os.path.exists(os.path.join(baseline_dir, "latent_directions.pt"))
+            )
+            self.assertTrue(
                 os.path.exists(os.path.join(baseline_dir, "score_thresholds.json"))
             )
             self.assertTrue(
@@ -973,6 +1565,21 @@ class TestDirectionalDeviationScoring(unittest.TestCase):
             with open(os.path.join(sign_dir, "thresholds_metadata.json"), "r") as f:
                 saved_metadata = json.load(f)
             self.assertEqual(saved_metadata, metadata)
+
+            loaded_evidence_tau = torch.load(
+                os.path.join(baseline_dir, "evidence_tau.pt")
+            )
+            loaded_latent_directions = torch.load(
+                os.path.join(baseline_dir, "latent_directions.pt")
+            )
+            self.assertTrue(
+                torch.allclose(loaded_evidence_tau, baseline_thresholds.evidence_tau)
+            )
+            self.assertTrue(
+                torch.equal(
+                    loaded_latent_directions, baseline_thresholds.latent_directions
+                )
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

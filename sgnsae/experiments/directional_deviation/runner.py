@@ -16,6 +16,7 @@ from sgnsae.experiments.directional_deviation.config import (
     load_experiment_config,
 )
 from sgnsae.experiments.directional_deviation.data import (
+    build_feature_directions_from_decoder,
     export_data_summary,
     generate_anomaly_test_data,
     generate_normal_data,
@@ -31,15 +32,19 @@ from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     assign_baseline_latent_directions,
     build_threshold_metadata,
     calibrate_baseline_evidence_thresholds,
     calibrate_score_thresholds,
     calibrate_sign_aware_latent_thresholds,
     calculate_baseline_directional_scores,
+    calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
+    fit_zscore_normalization_stats,
     persist_baseline_threshold_artifacts,
     persist_sign_aware_threshold_artifacts,
 )
@@ -48,6 +53,9 @@ from sgnsae.experiments.directional_deviation.training import (
     run_training_for_variant,
 )
 from sgnsae.experiments.directional_deviation.plotting import generate_plots_for_run
+from sgnsae.experiments.directional_deviation.decoder_alignment import (
+    persist_decoder_alignment_diagnostics,
+)
 
 
 _DEFAULT_BATCH_SIZE = 4096
@@ -145,6 +153,7 @@ def _calibrate_and_persist_thresholds(
     ScoreThresholds,
     Optional[SignAwareLatentThresholds],
     Optional[BaselineEvidenceThresholds],
+    Optional[ZScoreNormalizationStats],
 ]:
     thresholds_dir = os.path.join(model_dir, "thresholds")
     latent_quantile = float(experiment_config.thresholds.latent_quantile)
@@ -152,8 +161,12 @@ def _calibrate_and_persist_thresholds(
     score_fpr = float(experiment_config.thresholds.score_fpr)
 
     shift_mode = anomaly_manifest.get("shift_mode")
-    if shift_mode not in {"single_channel", "subset"}:
+    if shift_mode not in {"single_channel", "subset", "feature_direction"}:
         raise ValueError(f"Unsupported shift_mode in anomaly_manifest: {shift_mode}.")
+
+    baseline_shift_mode: Literal["single_channel", "subset"] = (
+        "single_channel" if shift_mode == "feature_direction" else shift_mode
+    )
 
     subset_indices_raw = anomaly_manifest.get("subset_indices")
     subset_indices = (
@@ -166,6 +179,34 @@ def _calibrate_and_persist_thresholds(
         )
     )
 
+    pooling = experiment_config.scoring.pooling
+    topk_k = experiment_config.scoring.topk_k
+    targets: Optional[Tensor] = None
+    latent_argmax: Optional[Tensor] = None
+    if experiment_config.scoring.target_restricted_scoring:
+        channels_to_evaluate = anomaly_manifest.get("channels_to_evaluate")
+        if not isinstance(channels_to_evaluate, list) or not channels_to_evaluate:
+            raise ValueError(
+                "channels_to_evaluate must be present in anomaly_manifest when target_restricted_scoring=True."
+            )
+        channels_to_evaluate_ints = [int(value) for value in channels_to_evaluate]
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(experiment_config.data.seed + 11)
+        permutation = torch.randperm(
+            len(channels_to_evaluate_ints), generator=generator
+        )
+        shuffled = torch.tensor(channels_to_evaluate_ints, dtype=torch.int64)[
+            permutation
+        ]
+        targets = shuffled[
+            torch.arange(int(x_val.shape[0]), dtype=torch.int64) % shuffled.shape[0]
+        ]
+        latent_argmax = calculate_latent_argmax_channel(model).to("cpu")
+
+    signal_normalization = experiment_config.scoring.signal_normalization
+    normalization_eps = float(experiment_config.scoring.normalization_eps)
+    zscore_stats_cpu: Optional[ZScoreNormalizationStats] = None
+
     if scoring_mode == "sign_aware":
         pi_val = _extract_validation_signal_cpu(
             model=model,
@@ -173,6 +214,12 @@ def _calibrate_and_persist_thresholds(
             x_val=x_val,
             batch_size=batch_size,
         )
+        if signal_normalization == "zscore":
+            zscore_stats_cpu = fit_zscore_normalization_stats(
+                signal=pi_val,
+                normalization_eps=normalization_eps,
+            )
+            pi_val = apply_zscore_normalization(pi_val, stats=zscore_stats_cpu)
         latent_thresholds_cpu = calibrate_sign_aware_latent_thresholds(
             pi_validation=pi_val,
             latent_quantile=latent_quantile,
@@ -181,6 +228,10 @@ def _calibrate_and_persist_thresholds(
         score_high_val, score_low_val = calculate_sign_aware_directional_scores(
             pi=pi_val,
             latent_thresholds=latent_thresholds_cpu,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax,
         )
         score_thresholds = calibrate_score_thresholds(
             score_high_validation=score_high_val,
@@ -193,20 +244,32 @@ def _calibrate_and_persist_thresholds(
             scoring_mode=scoring_mode,
             latent_quantile=latent_quantile,
             score_thresholds=score_thresholds,
-            shift_mode=shift_mode,
+            pooling=pooling,
+            topk_k=topk_k,
+            target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
+            shift_mode=baseline_shift_mode,
             subset_indices=subset_indices,
+            signal_normalization=signal_normalization,
+            normalization_eps=normalization_eps,
+            signal_normalization_stats=zscore_stats_cpu,
         )
         persist_sign_aware_threshold_artifacts(
             thresholds_dir=thresholds_dir,
             latent_thresholds=latent_thresholds_cpu,
             score_thresholds=score_thresholds,
             metadata=metadata,
+            signal_normalization_stats=zscore_stats_cpu,
         )
         latent_thresholds = SignAwareLatentThresholds(
             tau_plus=latent_thresholds_cpu.tau_plus.to(device=x_val.device),
             tau_minus=latent_thresholds_cpu.tau_minus.to(device=x_val.device),
         )
-        return score_thresholds, latent_thresholds, None
+        zscore_stats = (
+            None
+            if zscore_stats_cpu is None
+            else zscore_stats_cpu.to_device(x_val.device)
+        )
+        return score_thresholds, latent_thresholds, None, zscore_stats
 
     evidence_val = _extract_validation_signal_cpu(
         model=model,
@@ -214,9 +277,15 @@ def _calibrate_and_persist_thresholds(
         x_val=x_val,
         batch_size=batch_size,
     )
+    if signal_normalization == "zscore":
+        zscore_stats_cpu = fit_zscore_normalization_stats(
+            signal=evidence_val,
+            normalization_eps=normalization_eps,
+        )
+        evidence_val = apply_zscore_normalization(evidence_val, stats=zscore_stats_cpu)
     latent_directions = assign_baseline_latent_directions(
         model=model,
-        shift_mode=shift_mode,
+        shift_mode=baseline_shift_mode,
         subset_indices=subset_indices,
     ).to("cpu")
     baseline_thresholds_cpu = calibrate_baseline_evidence_thresholds(
@@ -228,6 +297,10 @@ def _calibrate_and_persist_thresholds(
     score_high_val, score_low_val = calculate_baseline_directional_scores(
         one_sided_evidence=evidence_val,
         baseline_thresholds=baseline_thresholds_cpu,
+        pooling=pooling,
+        topk_k=topk_k,
+        targets=targets,
+        latent_argmax_channel=latent_argmax,
     )
     score_thresholds = calibrate_score_thresholds(
         score_high_validation=score_high_val,
@@ -240,14 +313,21 @@ def _calibrate_and_persist_thresholds(
         scoring_mode=scoring_mode,
         latent_quantile=latent_quantile,
         score_thresholds=score_thresholds,
-        shift_mode=shift_mode,
+        pooling=pooling,
+        topk_k=topk_k,
+        target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
+        shift_mode=baseline_shift_mode,
         subset_indices=subset_indices,
+        signal_normalization=signal_normalization,
+        normalization_eps=normalization_eps,
+        signal_normalization_stats=zscore_stats_cpu,
     )
     persist_baseline_threshold_artifacts(
         thresholds_dir=thresholds_dir,
         baseline_thresholds=baseline_thresholds_cpu,
         score_thresholds=score_thresholds,
         metadata=metadata,
+        signal_normalization_stats=zscore_stats_cpu,
     )
     baseline_thresholds = BaselineEvidenceThresholds(
         evidence_tau=baseline_thresholds_cpu.evidence_tau.to(device=x_val.device),
@@ -255,7 +335,10 @@ def _calibrate_and_persist_thresholds(
             device=x_val.device
         ),
     )
-    return score_thresholds, None, baseline_thresholds
+    zscore_stats = (
+        None if zscore_stats_cpu is None else zscore_stats_cpu.to_device(x_val.device)
+    )
+    return score_thresholds, None, baseline_thresholds, zscore_stats
 
 
 def _persist_failed_evaluation(
@@ -263,6 +346,7 @@ def _persist_failed_evaluation(
     model_name: str,
     scoring_mode: Literal["sign_aware", "baseline"],
     error: Exception,
+    decoder_alignment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     evaluation_path = os.path.join(model_dir, "evaluation.json")
     evaluation = {
@@ -271,6 +355,7 @@ def _persist_failed_evaluation(
         "scoring_mode": scoring_mode,
         "metrics": None,
         "per_channel": None,
+        "decoder_alignment": decoder_alignment,
         "error": f"{type(error).__name__}: {error}",
     }
     with open(evaluation_path, "w") as f:
@@ -285,18 +370,21 @@ def _run_single_model(
     normal_data: Dict[str, Tensor],
     anomaly_data: Dict[str, Any],
     batch_size: int,
+    training_output: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     model_dir = os.path.join(run_dir, "models", model_config.name)
     os.makedirs(model_dir, exist_ok=True)
 
     scoring_mode = _determine_scoring_mode(model_config)
+    decoder_alignment: Optional[Dict[str, Any]] = None
     try:
-        training_output = run_training_for_variant(
-            experiment_config=experiment_config,
-            data=normal_data,
-            model_config=model_config,
-            device=experiment_config.device,
-        )
+        if training_output is None:
+            training_output = run_training_for_variant(
+                experiment_config=experiment_config,
+                data=normal_data,
+                model_config=model_config,
+                device=experiment_config.device,
+            )
         model = training_output["model"]
         persist_model_artifacts(
             model=model,
@@ -304,8 +392,12 @@ def _run_single_model(
             model_config=model_config,
             model_dir=model_dir,
         )
+        decoder_alignment = persist_decoder_alignment_diagnostics(
+            model=model,
+            model_dir=model_dir,
+        )
 
-        score_thresholds, latent_thresholds, baseline_thresholds = (
+        score_thresholds, latent_thresholds, baseline_thresholds, zscore_stats = (
             _calibrate_and_persist_thresholds(
                 experiment_config=experiment_config,
                 model=model,
@@ -325,8 +417,13 @@ def _run_single_model(
             score_thresholds=score_thresholds,
             evaluation_batch_size=batch_size,
             coverage_recall_target=float(experiment_config.coverage_recall_target),
+            pooling=experiment_config.scoring.pooling,
+            topk_k=experiment_config.scoring.topk_k,
+            target_restricted_scoring=experiment_config.scoring.target_restricted_scoring,
+            decoder_alignment=decoder_alignment,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
+            zscore_normalization_stats=zscore_stats,
         )
         return evaluate_and_persist_directional_deviation(
             model_dir=model_dir,
@@ -338,6 +435,7 @@ def _run_single_model(
             model_name=model_config.name,
             scoring_mode=scoring_mode,
             error=exc,
+            decoder_alignment=decoder_alignment,
         )
 
 
@@ -350,31 +448,111 @@ def _run_leaf_experiment(
 
     set_random_seed(config.data.seed)
     normal_data = generate_normal_data(config.data, config.device)
-    anomaly_data = generate_anomaly_test_data(
-        data_config=config.data,
-        anomaly_config=config.anomaly,
-        device=config.device,
-        batch_size=batch_size,
-    )
-    export_data_summary(
-        run_dir=run_dir,
-        data_config=config.data,
-        anomaly_config=config.anomaly,
-        normal_data=normal_data,
-        anomaly_data=anomaly_data,
-    )
 
     evaluations_by_model_name: Dict[str, Dict[str, Any]] = {}
-    for model_config in config.models:
-        set_random_seed(_stable_model_seed(config.data.seed, model_config.name))
-        evaluations_by_model_name[model_config.name] = _run_single_model(
+    if (
+        config.anomaly.shift_mode == "feature_direction"
+        and config.anomaly.direction_source == "per_model_decoder"
+    ):
+        raise ValueError(
+            "direction_source='per_model_decoder' is not supported by the runner. "
+            "Use direction_source='reference_model_decoder' or 'fixed_random'."
+        )
+    if (
+        config.anomaly.shift_mode == "feature_direction"
+        and config.anomaly.direction_source == "reference_model_decoder"
+    ):
+        reference_model_name = config.anomaly.reference_model_name
+        reference_model_config = next(
+            (
+                model_config
+                for model_config in config.models
+                if model_config.name == reference_model_name
+            ),
+            None,
+        )
+        if reference_model_config is None:
+            raise ValueError(
+                "reference_model_name must match a model name in config.models; "
+                f"received reference_model_name='{reference_model_name}'."
+            )
+
+        set_random_seed(_stable_model_seed(config.data.seed, reference_model_name))
+        reference_training_output = run_training_for_variant(
             experiment_config=config,
-            run_dir=run_dir,
-            model_config=model_config,
-            normal_data=normal_data,
-            anomaly_data=anomaly_data,
+            data=normal_data,
+            model_config=reference_model_config,
+            device=config.device,
+        )
+        direction_seed = config.data.seed + 6
+        base_samples = (
+            normal_data["x_test_normal"]
+            if config.anomaly.base_samples == "test_normal"
+            else normal_data["x_val"]
+        )
+        anomaly_directions, direction_metadata = build_feature_directions_from_decoder(
+            model=reference_training_output["model"],
+            anomaly_config=config.anomaly,
+            direction_seed=direction_seed,
+            base_samples=base_samples,
             batch_size=batch_size,
         )
+        anomaly_data = generate_anomaly_test_data(
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            device=config.device,
+            batch_size=batch_size,
+            anomaly_directions=anomaly_directions,
+            direction_metadata=direction_metadata,
+        )
+        export_data_summary(
+            run_dir=run_dir,
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            normal_data=normal_data,
+            anomaly_data=anomaly_data,
+        )
+
+        for model_config in config.models:
+            set_random_seed(_stable_model_seed(config.data.seed, model_config.name))
+            evaluations_by_model_name[model_config.name] = _run_single_model(
+                experiment_config=config,
+                run_dir=run_dir,
+                model_config=model_config,
+                normal_data=normal_data,
+                anomaly_data=anomaly_data,
+                batch_size=batch_size,
+                training_output=(
+                    reference_training_output
+                    if model_config.name == reference_model_name
+                    else None
+                ),
+            )
+    else:
+        anomaly_data = generate_anomaly_test_data(
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            device=config.device,
+            batch_size=batch_size,
+        )
+        export_data_summary(
+            run_dir=run_dir,
+            data_config=config.data,
+            anomaly_config=config.anomaly,
+            normal_data=normal_data,
+            anomaly_data=anomaly_data,
+        )
+
+        for model_config in config.models:
+            set_random_seed(_stable_model_seed(config.data.seed, model_config.name))
+            evaluations_by_model_name[model_config.name] = _run_single_model(
+                experiment_config=config,
+                run_dir=run_dir,
+                model_config=model_config,
+                normal_data=normal_data,
+                anomaly_data=anomaly_data,
+                batch_size=batch_size,
+            )
     persist_comparison_summary(run_dir, evaluations_by_model_name)
     try:
         generate_plots_for_run(run_dir)
@@ -394,6 +572,12 @@ def _aggregate_seed_sweep(
         "fpr_low",
         "covered_channels_fraction",
         "covered_channels_count",
+        "unique_channels_claimed",
+        "purity_mean",
+        "purity_median",
+        "purity_p10",
+        "purity_p50",
+        "purity_p90",
     )
     per_model_values: Dict[str, Dict[str, List[float]]] = defaultdict(
         lambda: defaultdict(list)

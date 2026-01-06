@@ -11,11 +11,15 @@ from sgnsae.experiments.directional_deviation.data import (
     LABEL_TYPE_LOW,
     DirectionalDeviationAnomalyBatch,
 )
+from sgnsae.experiments.directional_deviation.pooling import PoolingMode
 from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     ScoreThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     calculate_baseline_directional_scores,
+    calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
@@ -32,8 +36,13 @@ class DirectionalDeviationEvaluationInputs:
     score_thresholds: ScoreThresholds
     evaluation_batch_size: int
     coverage_recall_target: float
+    pooling: PoolingMode = "sum"
+    topk_k: Optional[int] = None
+    target_restricted_scoring: bool = False
+    decoder_alignment: Optional[Dict[str, Any]] = None
     latent_thresholds: Optional[SignAwareLatentThresholds] = None
     baseline_thresholds: Optional[BaselineEvidenceThresholds] = None
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None
 
 
 def _validate_probability(value: float, name: str) -> None:
@@ -98,6 +107,11 @@ def _compute_directional_scores(
     x: Tensor,
     latent_thresholds: Optional[SignAwareLatentThresholds],
     baseline_thresholds: Optional[BaselineEvidenceThresholds],
+    pooling: PoolingMode,
+    topk_k: Optional[int],
+    targets: Optional[Tensor],
+    latent_argmax_channel: Optional[Tensor],
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> Tuple[Tensor, Tensor]:
     if scoring_mode == "sign_aware":
         if latent_thresholds is None:
@@ -105,8 +119,15 @@ def _compute_directional_scores(
                 "latent_thresholds must be provided for sign_aware scoring."
             )
         pi = extract_detection_signal(model, x)
+        if zscore_normalization_stats is not None:
+            pi = apply_zscore_normalization(pi, stats=zscore_normalization_stats)
         return calculate_sign_aware_directional_scores(
-            pi=pi, latent_thresholds=latent_thresholds
+            pi=pi,
+            latent_thresholds=latent_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
         )
     if scoring_mode == "baseline":
         if baseline_thresholds is None:
@@ -114,9 +135,17 @@ def _compute_directional_scores(
                 "baseline_thresholds must be provided for baseline scoring."
             )
         evidence = extract_one_sided_evidence(model, x)
+        if zscore_normalization_stats is not None:
+            evidence = apply_zscore_normalization(
+                evidence, stats=zscore_normalization_stats
+            )
         return calculate_baseline_directional_scores(
             one_sided_evidence=evidence,
             baseline_thresholds=baseline_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
         )
     raise ValueError(f"Unsupported scoring_mode: {scoring_mode}.")
 
@@ -128,7 +157,13 @@ def _calculate_flag_rates_for_normal_set(
     score_thresholds: ScoreThresholds,
     latent_thresholds: Optional[SignAwareLatentThresholds],
     baseline_thresholds: Optional[BaselineEvidenceThresholds],
+    pooling: PoolingMode,
+    topk_k: Optional[int],
+    target_restricted_scoring: bool,
+    channels_to_evaluate: Optional[List[int]],
+    latent_argmax_channel: Optional[Tensor],
     batch_size: int,
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None,
 ) -> Tuple[Optional[float], Optional[float]]:
     num_normals = int(x_test_normal.shape[0])
     if num_normals == 0:
@@ -136,13 +171,39 @@ def _calculate_flag_rates_for_normal_set(
 
     total_flagged_high = 0
     total_flagged_low = 0
+    channels_tensor: Optional[Tensor] = None
+    target_offset = 0
+    if target_restricted_scoring:
+        if channels_to_evaluate is None or not channels_to_evaluate:
+            raise ValueError(
+                "channels_to_evaluate must be provided when target_restricted_scoring=True."
+            )
+        channels_tensor = torch.tensor(channels_to_evaluate, dtype=torch.int64)
+        if latent_argmax_channel is None:
+            raise ValueError(
+                "latent_argmax_channel must be provided when target_restricted_scoring=True."
+            )
+
     for batch in _iterate_tensor_batches(x_test_normal, batch_size=batch_size):
+        targets: Optional[Tensor] = None
+        if channels_tensor is not None:
+            batch_count = int(batch.shape[0])
+            indices = (
+                torch.arange(batch_count, dtype=torch.int64) + int(target_offset)
+            ) % int(channels_tensor.shape[0])
+            targets = channels_tensor[indices].to(device=batch.device)
+            target_offset += batch_count
         score_high, score_low = _compute_directional_scores(
             model=model,
             scoring_mode=scoring_mode,
             x=batch,
             latent_thresholds=latent_thresholds,
             baseline_thresholds=baseline_thresholds,
+            zscore_normalization_stats=zscore_normalization_stats,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=targets,
+            latent_argmax_channel=latent_argmax_channel,
         )
         total_flagged_high += int(
             (score_high > score_thresholds.theta_high).sum().item()
@@ -159,6 +220,10 @@ def evaluate_directional_deviation(
     anomaly_data: Dict[str, Any],
     x_test_normal: Tensor,
     score_thresholds: ScoreThresholds,
+    zscore_normalization_stats: Optional[ZScoreNormalizationStats] = None,
+    pooling: PoolingMode = "sum",
+    topk_k: Optional[int] = None,
+    target_restricted_scoring: bool = False,
     latent_thresholds: Optional[SignAwareLatentThresholds] = None,
     baseline_thresholds: Optional[BaselineEvidenceThresholds] = None,
     evaluation_batch_size: int = 4096,
@@ -185,23 +250,58 @@ def evaluate_directional_deviation(
     total_low_by_channel: Optional[Tensor] = None
     detected_low_by_channel: Optional[Tensor] = None
 
-    per_channel_enabled = anomaly_manifest.get("shift_mode") == "single_channel"
+    shift_mode = anomaly_manifest.get("shift_mode")
+    per_channel_enabled = shift_mode == "single_channel"
+    per_direction_enabled = shift_mode == "feature_direction"
     num_channels = int(anomaly_manifest.get("num_channels", x_test_normal.shape[1]))
     if per_channel_enabled:
         total_high_by_channel = torch.zeros(num_channels, dtype=torch.int64)
         detected_high_by_channel = torch.zeros(num_channels, dtype=torch.int64)
         total_low_by_channel = torch.zeros(num_channels, dtype=torch.int64)
         detected_low_by_channel = torch.zeros(num_channels, dtype=torch.int64)
+    total_high_by_direction: Optional[Tensor] = None
+    detected_high_by_direction: Optional[Tensor] = None
+    total_low_by_direction: Optional[Tensor] = None
+    detected_low_by_direction: Optional[Tensor] = None
+    num_directions = int(anomaly_manifest.get("num_directions", 0))
+    if per_direction_enabled:
+        if num_directions <= 0:
+            raise ValueError(
+                "anomaly_manifest must include a positive num_directions when shift_mode='feature_direction'."
+            )
+        total_high_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+        detected_high_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+        total_low_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+        detected_low_by_direction = torch.zeros(num_directions, dtype=torch.int64)
+
+    latent_argmax: Optional[Tensor] = None
+    channels_to_evaluate: Optional[List[int]] = None
+    if target_restricted_scoring:
+        if not per_channel_enabled:
+            raise ValueError(
+                "target_restricted_scoring is only supported when shift_mode='single_channel'."
+            )
+        channels_raw = anomaly_manifest.get("channels_to_evaluate")
+        if not isinstance(channels_raw, list) or not channels_raw:
+            raise ValueError("anomaly_manifest is missing channels_to_evaluate.")
+        channels_to_evaluate = [int(value) for value in channels_raw]
+        latent_argmax = calculate_latent_argmax_channel(model)
 
     model.eval()
     with torch.no_grad():
         for batch in anomaly_batches:
+            targets = batch.labels_channel if target_restricted_scoring else None
             score_high, score_low = _compute_directional_scores(
                 model=model,
                 scoring_mode=scoring_mode,
                 x=batch.x,
                 latent_thresholds=latent_thresholds,
                 baseline_thresholds=baseline_thresholds,
+                zscore_normalization_stats=zscore_normalization_stats,
+                pooling=pooling,
+                topk_k=topk_k,
+                targets=targets,
+                latent_argmax_channel=latent_argmax,
             )
             predicted_high = score_high > score_thresholds.theta_high
             predicted_low = score_low > score_thresholds.theta_low
@@ -248,6 +348,40 @@ def evaluate_directional_deviation(
                         channels_low_detected, minlength=num_channels
                     )
 
+            if per_direction_enabled:
+                assert total_high_by_direction is not None
+                assert detected_high_by_direction is not None
+                assert total_low_by_direction is not None
+                assert detected_low_by_direction is not None
+                if torch.any(batch.labels_channel < 0):
+                    raise ValueError(
+                        "Per-direction evaluation requires non-negative labels_channel entries."
+                    )
+
+                if torch.any(high_mask):
+                    directions_high = batch.labels_channel[high_mask].to("cpu")
+                    directions_high_detected = batch.labels_channel[
+                        predicted_high & high_mask
+                    ].to("cpu")
+                    total_high_by_direction += torch.bincount(
+                        directions_high, minlength=num_directions
+                    )
+                    detected_high_by_direction += torch.bincount(
+                        directions_high_detected, minlength=num_directions
+                    )
+
+                if torch.any(low_mask):
+                    directions_low = batch.labels_channel[low_mask].to("cpu")
+                    directions_low_detected = batch.labels_channel[
+                        predicted_low & low_mask
+                    ].to("cpu")
+                    total_low_by_direction += torch.bincount(
+                        directions_low, minlength=num_directions
+                    )
+                    detected_low_by_direction += torch.bincount(
+                        directions_low_detected, minlength=num_directions
+                    )
+
     recall_high = None if total_high == 0 else float(detected_high) / total_high
     recall_low = None if total_low == 0 else float(detected_low) / total_low
 
@@ -258,6 +392,12 @@ def evaluate_directional_deviation(
         score_thresholds=score_thresholds,
         latent_thresholds=latent_thresholds,
         baseline_thresholds=baseline_thresholds,
+        zscore_normalization_stats=zscore_normalization_stats,
+        pooling=pooling,
+        topk_k=topk_k,
+        target_restricted_scoring=target_restricted_scoring,
+        channels_to_evaluate=channels_to_evaluate,
+        latent_argmax_channel=latent_argmax,
         batch_size=evaluation_batch_size,
     )
 
@@ -324,10 +464,85 @@ def evaluate_directional_deviation(
             "covered_channels_fraction": covered_fraction,
         }
 
+    per_direction: Optional[Dict[str, Any]] = None
+    if per_direction_enabled:
+        direction_indices_raw = anomaly_manifest.get("direction_indices_to_evaluate")
+        direction_indices = (
+            list(range(num_directions))
+            if direction_indices_raw is None
+            else [int(value) for value in direction_indices_raw]
+        )
+        if not direction_indices:
+            raise ValueError("direction_indices_to_evaluate must be non-empty.")
+
+        assert total_high_by_direction is not None
+        assert detected_high_by_direction is not None
+        assert total_low_by_direction is not None
+        assert detected_low_by_direction is not None
+
+        per_direction_recall_high: List[Optional[float]] = []
+        per_direction_recall_low: List[Optional[float]] = []
+        per_direction_num_high: List[int] = []
+        per_direction_num_low: List[int] = []
+        covered_directions = 0
+
+        for direction_index in direction_indices:
+            num_high = int(total_high_by_direction[direction_index].item())
+            num_low = int(total_low_by_direction[direction_index].item())
+            per_direction_num_high.append(num_high)
+            per_direction_num_low.append(num_low)
+
+            recall_high_direction = (
+                None
+                if num_high == 0
+                else float(detected_high_by_direction[direction_index].item())
+                / num_high
+            )
+            recall_low_direction = (
+                None
+                if num_low == 0
+                else float(detected_low_by_direction[direction_index].item()) / num_low
+            )
+            per_direction_recall_high.append(recall_high_direction)
+            per_direction_recall_low.append(recall_low_direction)
+
+            if (
+                recall_high_direction is not None
+                and recall_low_direction is not None
+                and recall_high_direction >= coverage_recall_target
+                and recall_low_direction >= coverage_recall_target
+            ):
+                covered_directions += 1
+
+        covered_fraction = float(covered_directions) / len(direction_indices)
+        per_direction = {
+            "directions": direction_indices,
+            "recall_high": per_direction_recall_high,
+            "recall_low": per_direction_recall_low,
+            "num_high": per_direction_num_high,
+            "num_low": per_direction_num_low,
+            "coverage_recall_target": coverage_recall_target,
+            "covered_directions_count": covered_directions,
+            "covered_directions_fraction": covered_fraction,
+        }
+
+    target_kind = (
+        "channel"
+        if per_channel_enabled
+        else "direction" if per_direction_enabled else None
+    )
+    num_targets: Optional[int] = None
+    if per_channel is not None:
+        num_targets = len(per_channel.get("channels", []))
+    if per_direction is not None:
+        num_targets = len(per_direction.get("directions", []))
+
     return {
         "model_name": model_name,
         "model_type": type(model).__name__,
         "scoring_mode": scoring_mode,
+        "target_kind": target_kind,
+        "num_targets": num_targets,
         "metrics": {
             "recall_high": recall_high,
             "recall_low": recall_low,
@@ -342,6 +557,7 @@ def evaluate_directional_deviation(
             "score_quantile": score_thresholds.score_quantile,
         },
         "per_channel": per_channel,
+        "per_direction": per_direction,
         "error": None,
     }
 
@@ -360,6 +576,10 @@ def evaluate_and_persist_directional_deviation(
             anomaly_data=inputs.anomaly_data,
             x_test_normal=inputs.x_test_normal,
             score_thresholds=inputs.score_thresholds,
+            zscore_normalization_stats=inputs.zscore_normalization_stats,
+            pooling=inputs.pooling,
+            topk_k=inputs.topk_k,
+            target_restricted_scoring=inputs.target_restricted_scoring,
             latent_thresholds=inputs.latent_thresholds,
             baseline_thresholds=inputs.baseline_thresholds,
             evaluation_batch_size=inputs.evaluation_batch_size,
@@ -370,6 +590,8 @@ def evaluate_and_persist_directional_deviation(
             "model_name": inputs.model_name,
             "model_type": type(inputs.model).__name__,
             "scoring_mode": inputs.scoring_mode,
+            "target_kind": None,
+            "num_targets": None,
             "metrics": {
                 "recall_high": None,
                 "recall_low": None,
@@ -384,8 +606,10 @@ def evaluate_and_persist_directional_deviation(
                 "score_quantile": inputs.score_thresholds.score_quantile,
             },
             "per_channel": None,
+            "per_direction": None,
             "error": f"{type(exc).__name__}: {exc}",
         }
+    evaluation["decoder_alignment"] = inputs.decoder_alignment
     with open(evaluation_path, "w") as f:
         json.dump(evaluation, f, indent=2)
     return evaluation
@@ -395,11 +619,32 @@ def build_comparison_summary(
     evaluations_by_model_name: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
     models: Dict[str, Any] = {}
+    target_kind: Optional[str] = None
+    num_targets: Optional[int] = None
     for model_name, evaluation in evaluations_by_model_name.items():
         metrics = evaluation.get("metrics") if isinstance(evaluation, dict) else None
         per_channel = (
             evaluation.get("per_channel") if isinstance(evaluation, dict) else None
         )
+        per_direction = (
+            evaluation.get("per_direction") if isinstance(evaluation, dict) else None
+        )
+        decoder_alignment = (
+            evaluation.get("decoder_alignment")
+            if isinstance(evaluation, dict)
+            else None
+        )
+        if target_kind is None and isinstance(evaluation, dict):
+            target_kind_value = evaluation.get("target_kind")
+            target_kind = (
+                str(target_kind_value) if target_kind_value is not None else None
+            )
+        if num_targets is None and isinstance(evaluation, dict):
+            num_targets_value = evaluation.get("num_targets")
+            num_targets = (
+                int(num_targets_value) if num_targets_value is not None else None
+            )
+
         per_channel_fraction = (
             None
             if not isinstance(per_channel, dict)
@@ -409,6 +654,46 @@ def build_comparison_summary(
             None
             if not isinstance(per_channel, dict)
             else per_channel.get("covered_channels_count")
+        )
+        per_direction_fraction = (
+            None
+            if not isinstance(per_direction, dict)
+            else per_direction.get("covered_directions_fraction")
+        )
+        per_direction_count = (
+            None
+            if not isinstance(per_direction, dict)
+            else per_direction.get("covered_directions_count")
+        )
+        unique_channels_claimed = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("unique_channels_claimed")
+        )
+        purity_mean = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_mean")
+        )
+        purity_median = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_median")
+        )
+        purity_p10 = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_p10")
+        )
+        purity_p50 = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_p50")
+        )
+        purity_p90 = (
+            None
+            if not isinstance(decoder_alignment, dict)
+            else decoder_alignment.get("purity_p90")
         )
         models[model_name] = {
             "recall_high": (
@@ -423,12 +708,31 @@ def build_comparison_summary(
             "fpr_low": (
                 None if not isinstance(metrics, dict) else metrics.get("fpr_low")
             ),
+            "target_kind": (
+                evaluation.get("target_kind") if isinstance(evaluation, dict) else None
+            ),
+            "num_targets": (
+                evaluation.get("num_targets") if isinstance(evaluation, dict) else None
+            ),
             "covered_channels_fraction": per_channel_fraction,
             "covered_channels_count": per_channel_count,
+            "covered_directions_fraction": per_direction_fraction,
+            "covered_directions_count": per_direction_count,
+            "unique_channels_claimed": unique_channels_claimed,
+            "purity_mean": purity_mean,
+            "purity_median": purity_median,
+            "purity_p10": purity_p10,
+            "purity_p50": purity_p50,
+            "purity_p90": purity_p90,
             "error": evaluation.get("error") if isinstance(evaluation, dict) else None,
         }
 
-    return {"models": models}
+    targets_summary = (
+        None
+        if target_kind is None
+        else {"kind": target_kind, "num_targets": num_targets}
+    )
+    return {"targets": targets_summary, "models": models}
 
 
 def persist_comparison_summary(

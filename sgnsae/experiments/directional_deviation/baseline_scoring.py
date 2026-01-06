@@ -1,13 +1,20 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from torch import Tensor
+
+from sgnsae.experiments.directional_deviation.pooling import (
+    PoolingMode,
+    pool_exceedances,
+)
 
 
 def calculate_directional_scores_from_one_sided_evidence(
     one_sided_evidence: Tensor,
     evidence_thresholds: Tensor,
     latent_directions: Tensor,
+    pooling: PoolingMode = "sum",
+    topk_k: Optional[int] = None,
 ) -> Tuple[Tensor, Tensor]:
     if one_sided_evidence.ndim != 2:
         raise ValueError(
@@ -42,15 +49,14 @@ def calculate_directional_scores_from_one_sided_evidence(
     high_mask = latent_directions > 0
     low_mask = latent_directions < 0
 
-    score_high = (
-        evidence_excess[:, high_mask].sum(dim=1)
-        if torch.any(high_mask)
-        else torch.zeros(batch_size, device=evidence_excess.device)
+    score_high = pool_exceedances(
+        exceedances=evidence_excess[:, high_mask],
+        pooling=pooling,
+        topk_k=topk_k,
     )
-    score_low = (
-        evidence_excess[:, low_mask].sum(dim=1)
-        if torch.any(low_mask)
-        else torch.zeros(batch_size, device=evidence_excess.device)
+    score_low = pool_exceedances(
+        exceedances=evidence_excess[:, low_mask],
+        pooling=pooling,
+        topk_k=topk_k,
     )
     return score_high, score_low
-

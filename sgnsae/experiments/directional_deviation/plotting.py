@@ -15,11 +15,15 @@ from sgnsae.experiments.directional_deviation.data import (
     LABEL_TYPE_HIGH,
     LABEL_TYPE_LOW,
 )
+from sgnsae.experiments.directional_deviation.pooling import PoolingMode
 from sgnsae.experiments.directional_deviation.scoring import (
     BaselineEvidenceThresholds,
     SignAwareLatentThresholds,
+    ZScoreNormalizationStats,
+    apply_zscore_normalization,
     assign_baseline_latent_directions,
     calculate_baseline_directional_scores,
+    calculate_latent_argmax_channel,
     calculate_sign_aware_directional_scores,
     extract_detection_signal,
     extract_one_sided_evidence,
@@ -48,6 +52,7 @@ def generate_plots_for_run(run_dir: str) -> None:
     models = comparison_summary.get("models")
     if isinstance(models, dict):
         _plot_leaf_run_summary(plots_dir=plots_dir, models=models)
+        _plot_decoder_purity_histograms(run_dir=run_dir, plots_dir=plots_dir)
         _plot_score_distributions_for_models(run_dir=run_dir, plots_dir=plots_dir)
 
 
@@ -83,6 +88,11 @@ def _plot_width_sweep_summary(plots_dir: str, summary: Dict[str, Any]) -> None:
             "Covered Channels Fraction",
             "coverage_vs_width.png",
         ),
+        (
+            "unique_channels_claimed",
+            "Unique Channels Claimed",
+            "unique_channels_vs_width.png",
+        ),
         ("fpr_high", "False Positive Rate (High)", "fpr_high_vs_width.png"),
         ("fpr_low", "False Positive Rate (Low)", "fpr_low_vs_width.png"),
     ):
@@ -94,6 +104,63 @@ def _plot_width_sweep_summary(plots_dir: str, summary: Dict[str, Any]) -> None:
             title=title,
             filename=filename,
         )
+
+
+def _plot_decoder_purity_histograms(run_dir: str, plots_dir: str) -> None:
+    models_root = os.path.join(run_dir, "models")
+    if not os.path.isdir(models_root):
+        return
+
+    model_names = sorted(
+        name
+        for name in os.listdir(models_root)
+        if os.path.isdir(os.path.join(models_root, name))
+    )
+    if not model_names:
+        return
+
+    purities: List[Tuple[str, np.ndarray]] = []
+    for model_name in model_names:
+        alignment = _load_json_if_present(
+            os.path.join(models_root, model_name, "decoder_alignment.json")
+        )
+        if alignment is None:
+            continue
+        if "error" in alignment:
+            continue
+        latent_purity = alignment.get("latent_purity")
+        if not isinstance(latent_purity, list) or not latent_purity:
+            continue
+        purity_values = np.array([float(value) for value in latent_purity])
+        purity_values = purity_values[np.isfinite(purity_values)]
+        if purity_values.size == 0:
+            continue
+        purities.append((model_name, np.clip(purity_values, 0.0, 1.0)))
+
+    if not purities:
+        return
+
+    num_models = len(purities)
+    fig, axes = plt.subplots(
+        nrows=1,
+        ncols=num_models,
+        figsize=(6.0 * num_models, 4.2),
+        dpi=150,
+        squeeze=False,
+        sharey=True,
+    )
+    bins = np.linspace(0.0, 1.0, num=21, dtype=np.float64)
+    for axis, (model_name, purity_values) in zip(axes[0], purities):
+        axis.hist(purity_values, bins=bins, color="#4c72b0", alpha=0.8)
+        axis.set_title(model_name)
+        axis.set_xlabel("latent_purity")
+        axis.grid(True, axis="y", linestyle="--", alpha=0.35)
+
+    axes[0][0].set_ylabel("count")
+    path = os.path.join(plots_dir, "decoder_purity_hist.png")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
 
 
 def _plot_recall_vs_width(
@@ -382,6 +449,7 @@ def _plot_score_histograms_grid_for_models(run_dir: str, plots_dir: str) -> None
     x_test_normal = preview.get("x_test_normal")
     x_test_anomaly = preview.get("x_test_anomaly")
     labels_type = preview.get("labels_type")
+    labels_channel = preview.get("labels_channel")
     if x_test_normal is None or x_test_anomaly is None or labels_type is None:
         return
 
@@ -436,6 +504,7 @@ def _plot_score_histograms_grid_for_models(run_dir: str, plots_dir: str) -> None
                 anomaly_manifest=anomaly_manifest,
                 thresholds_dir=thresholds_dir,
                 x=x_test_normal,
+                targets=None,
             )
             score_high_anom, score_low_anom = _compute_directional_scores(
                 model=model,
@@ -443,6 +512,7 @@ def _plot_score_histograms_grid_for_models(run_dir: str, plots_dir: str) -> None
                 anomaly_manifest=anomaly_manifest,
                 thresholds_dir=thresholds_dir,
                 x=x_test_anomaly,
+                targets=labels_channel,
             )
         except Exception:
             continue
@@ -585,6 +655,7 @@ def _plot_score_distributions_for_model(
     x_test_normal = preview.get("x_test_normal")
     x_test_anomaly = preview.get("x_test_anomaly")
     labels_type = preview.get("labels_type")
+    labels_channel = preview.get("labels_channel")
     if x_test_normal is None or x_test_anomaly is None or labels_type is None:
         return
 
@@ -594,6 +665,7 @@ def _plot_score_distributions_for_model(
         anomaly_manifest=anomaly_manifest,
         thresholds_dir=thresholds_dir,
         x=x_test_normal,
+        targets=None,
     )
     score_high_anom, score_low_anom = _compute_directional_scores(
         model=model,
@@ -601,6 +673,7 @@ def _plot_score_distributions_for_model(
         anomaly_manifest=anomaly_manifest,
         thresholds_dir=thresholds_dir,
         x=x_test_anomaly,
+        targets=labels_channel,
     )
 
     high_mask = labels_type == int(LABEL_TYPE_HIGH)
@@ -633,7 +706,97 @@ def _compute_directional_scores(
     anomaly_manifest: Dict[str, Any],
     thresholds_dir: str,
     x: Tensor,
+    targets: Optional[Tensor],
 ) -> Tuple[Tensor, Tensor]:
+    pooling: PoolingMode = "sum"
+    topk_k: Optional[int] = None
+    target_restricted_scoring = False
+    zscore_stats: Optional[ZScoreNormalizationStats] = None
+
+    metadata = _load_json_if_present(
+        os.path.join(thresholds_dir, "thresholds_metadata.json")
+    )
+    if isinstance(metadata, dict):
+        scoring_config = metadata.get("scoring_config")
+        if isinstance(scoring_config, dict):
+            pooling_raw = scoring_config.get("pooling")
+            if pooling_raw in {"sum", "max", "topk"}:
+                pooling = pooling_raw
+            topk_k_raw = scoring_config.get("topk_k")
+            if isinstance(topk_k_raw, int):
+                topk_k = int(topk_k_raw)
+            target_restricted_raw = scoring_config.get("target_restricted_scoring")
+            if isinstance(target_restricted_raw, bool):
+                target_restricted_scoring = bool(target_restricted_raw)
+
+        signal_normalization = metadata.get("signal_normalization")
+        if isinstance(signal_normalization, dict):
+            normalization_mode = signal_normalization.get("mode")
+            if normalization_mode == "zscore" and zscore_stats is None:
+                mean_raw = signal_normalization.get("mean")
+                std_raw = signal_normalization.get("std")
+                eps_raw = signal_normalization.get("normalization_eps")
+                if (
+                    isinstance(mean_raw, list)
+                    and isinstance(std_raw, list)
+                    and isinstance(eps_raw, (int, float))
+                ):
+                    mean_tensor = torch.tensor(mean_raw, dtype=torch.float32)
+                    std_tensor = torch.tensor(std_raw, dtype=torch.float32)
+                    eps_value = float(eps_raw)
+                    clamped_mask = std_tensor < eps_value
+                    zscore_stats = ZScoreNormalizationStats(
+                        mean=mean_tensor,
+                        std=std_tensor,
+                        eps=eps_value,
+                        clamped_mask=clamped_mask,
+                    )
+
+    normalization_payload_path = os.path.join(thresholds_dir, "signal_normalization.pt")
+    if zscore_stats is None and os.path.isfile(normalization_payload_path):
+        normalization_payload = torch.load(
+            normalization_payload_path, map_location="cpu"
+        )
+        if isinstance(normalization_payload, dict):
+            normalization_mode = normalization_payload.get("mode")
+            if normalization_mode == "zscore":
+                mean_tensor = normalization_payload.get("mean")
+                std_tensor = normalization_payload.get("std")
+                clamped_mask = normalization_payload.get("clamped_mask")
+                eps_value = normalization_payload.get("normalization_eps")
+                if (
+                    isinstance(mean_tensor, Tensor)
+                    and isinstance(std_tensor, Tensor)
+                    and isinstance(clamped_mask, Tensor)
+                    and isinstance(eps_value, (int, float))
+                ):
+                    zscore_stats = ZScoreNormalizationStats(
+                        mean=mean_tensor,
+                        std=std_tensor,
+                        eps=float(eps_value),
+                        clamped_mask=clamped_mask.to(dtype=torch.bool),
+                    )
+
+    resolved_targets: Optional[Tensor] = targets if target_restricted_scoring else None
+    latent_argmax: Optional[Tensor] = None
+    if target_restricted_scoring:
+        latent_argmax = calculate_latent_argmax_channel(model).to(device=x.device)
+        if resolved_targets is None:
+            channels_raw = anomaly_manifest.get("channels_to_evaluate")
+            if not isinstance(channels_raw, list) or not channels_raw:
+                raise ValueError(
+                    "anomaly_manifest is missing channels_to_evaluate required for target-restricted plotting."
+                )
+            channels = torch.tensor(
+                [int(value) for value in channels_raw], dtype=torch.int64
+            )
+            indices = torch.arange(int(x.shape[0]), dtype=torch.int64) % int(
+                channels.shape[0]
+            )
+            resolved_targets = channels[indices].to(device=x.device)
+        else:
+            resolved_targets = resolved_targets.to(device=x.device, dtype=torch.int64)
+
     with torch.no_grad():
         if scoring_mode == "sign_aware":
             tau_plus = _load_torch_tensor_if_present(
@@ -648,8 +811,15 @@ def _compute_directional_scores(
                 tau_plus=tau_plus, tau_minus=tau_minus
             )
             pi = extract_detection_signal(model, x)
+            if zscore_stats is not None:
+                pi = apply_zscore_normalization(pi, stats=zscore_stats)
             score_high, score_low = calculate_sign_aware_directional_scores(
-                pi=pi, latent_thresholds=latent_thresholds
+                pi=pi,
+                latent_thresholds=latent_thresholds,
+                pooling=pooling,
+                topk_k=topk_k,
+                targets=resolved_targets,
+                latent_argmax_channel=latent_argmax,
             )
             return score_high.detach(), score_low.detach()
 
@@ -672,18 +842,36 @@ def _compute_directional_scores(
                 else None
             )
         )
-        latent_directions = assign_baseline_latent_directions(
-            model=model,
-            shift_mode=shift_mode,
-            subset_indices=subset_indices_list,
-        ).to("cpu")
+        latent_directions = _load_torch_tensor_if_present(
+            os.path.join(thresholds_dir, "latent_directions.pt")
+        )
+        if latent_directions is None:
+            latent_directions = assign_baseline_latent_directions(
+                model=model,
+                shift_mode=shift_mode,
+                subset_indices=subset_indices_list,
+            ).to("cpu")
+        else:
+            if latent_directions.ndim != 1:
+                raise ValueError(
+                    "Expected latent_directions.ndim == 1, got "
+                    f"{latent_directions.ndim}."
+                )
+            latent_directions = latent_directions.to(device="cpu", dtype=torch.int64)
         baseline_thresholds = BaselineEvidenceThresholds(
             evidence_tau=evidence_tau,
             latent_directions=latent_directions,
         )
         evidence = extract_one_sided_evidence(model, x)
+        if zscore_stats is not None:
+            evidence = apply_zscore_normalization(evidence, stats=zscore_stats)
         score_high, score_low = calculate_baseline_directional_scores(
-            one_sided_evidence=evidence, baseline_thresholds=baseline_thresholds
+            one_sided_evidence=evidence,
+            baseline_thresholds=baseline_thresholds,
+            pooling=pooling,
+            topk_k=topk_k,
+            targets=resolved_targets,
+            latent_argmax_channel=latent_argmax,
         )
         return score_high.detach(), score_low.detach()
 

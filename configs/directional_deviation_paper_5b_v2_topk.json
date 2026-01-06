@@ -1,0 +1,108 @@
+{
+  "output_dir": "assets/directional_deviation_paper/5b_feature_direction_v2_topk",
+  "device": "auto",
+  "verbose": false,
+  "log_every_n_steps": 1000,
+  "log_every_n_epochs": 1,
+  "coverage_recall_target": 0.8,
+  "width_sweep": [
+    128,
+    256,
+    512
+  ],
+  "data": {
+    "seed": 0,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "num_train": 100000,
+    "num_val": 20000,
+    "num_test_normal": 20000,
+    "num_test_high_per_channel": 50,
+    "num_test_low_per_channel": 50,
+    "num_channels": 1024,
+    "noise_std": 0.0,
+    "normal_mode": "standard_normal",
+    "anomaly_eval_mode": "stream",
+    "train_anomaly_fraction": 0.0
+  },
+  "anomaly": {
+    "delta": 6.0,
+    "shift_mode": "feature_direction",
+    "direction_source": "reference_model_decoder",
+    "reference_model_name": "sign_aware_gated_sae",
+    "direction_selection": "top_pi_std",
+    "num_directions": 128,
+    "normalize_directions": true,
+    "direction_delta_mode": "fixed_pi_shift",
+    "max_direction_input_delta": 1000.0,
+    "num_test_high_per_direction": 50,
+    "num_test_low_per_direction": 50,
+    "base_samples": "val_normal"
+  },
+  "scoring": {
+    "pooling": "topk",
+    "topk_k": 4,
+    "signal_normalization": "zscore",
+    "normalization_eps": 1e-08,
+    "target_restricted_scoring": false
+  },
+  "thresholds": {
+    "latent_quantile": 0.99,
+    "score_fpr": 0.01,
+    "min_validation_samples": 1000,
+    "deterministic_algorithms": false
+  },
+  "models": [
+    {
+      "name": "relu_sae",
+      "sae_class": "SAE",
+      "sign_aware": false,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 128,
+      "sparsity_coeff": 0.001,
+      "learning_rate": 0.0001,
+      "num_epochs": 10,
+      "batch_size": 1024,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
+      "name": "gated_sae",
+      "sae_class": "GatedSAE",
+      "sign_aware": false,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 128,
+      "sparsity_coeff": 0.001,
+      "learning_rate": 0.0001,
+      "num_epochs": 10,
+      "batch_size": 1024,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
+      "name": "sign_aware_gated_sae",
+      "sae_class": "GatedSAE",
+      "sign_aware": true,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": true,
+      "d_hidden": 128,
+      "sparsity_coeff": 0.001,
+      "learning_rate": 0.0001,
+      "num_epochs": 10,
+      "batch_size": 1024,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    }
+  ]
+}
