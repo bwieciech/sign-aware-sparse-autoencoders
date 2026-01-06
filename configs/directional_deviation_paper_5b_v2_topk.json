@@ -1,5 +1,5 @@
 {
-  "output_dir": "assets/directional_deviation_paper/5b_feature_direction_v2",
+  "output_dir": "assets/directional_deviation_paper/5b_feature_direction_v2_topk",
   "device": "auto",
   "verbose": false,
   "log_every_n_steps": 1000,
@@ -44,7 +44,7 @@
   },
   "scoring": {
     "pooling": "topk",
-    "topk_k": 8,
+    "topk_k": 4,
     "signal_normalization": "zscore",
     "normalization_eps": 1e-08,
     "target_restricted_scoring": false
