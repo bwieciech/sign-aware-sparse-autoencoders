@@ -258,16 +258,16 @@
     - Case 2: construct a model with one perfect `+u_j` and one imperfect `-u_j` below threshold, coverage should count only the positive side.
     - _Requirements: 3.2, 3.9_
 
-- [ ] 16. Make the SignedSoftThreshold baseline stable and comparable
-  - [ ] 16.1 Normalize the decoder and tie the projection
+- [x] 16. Make the SignedSoftThreshold baseline stable and comparable
+  - [x] 16.1 Normalize the decoder and tie the projection
     - Update `SignedSoftThresholdSAE.forward` to normalize decoder columns (like `SAE.forward`) and use the normalized decoder for both encoding and decoding.
     - This prevents trivial reparameterizations that can distort calibration metrics.
     - _Requirements: 6.6_
-  - [ ] 16.2 Remove (or guard) the `einops.einsum` dependency in the baseline
+  - [x] 16.2 Remove (or guard) the `einops.einsum` dependency in the baseline
     - Preferred: replace `einops.einsum` usage with `torch.einsum` in `SignedSoftThresholdSAE` (and optionally other model classes).
     - If not replacing, add an explicit version check at startup that raises a clear error if `einops.einsum` is unavailable.
     - _Requirements: 7.1_
-  - [ ] 16.3 Add a scale-invariance unit test
+  - [x] 16.3 Add a scale-invariance unit test
     - Create a `SignedSoftThresholdSAE`, scale its raw `W_dec` by a constant factor, and assert that reconstructions stay the same (within tolerance) if `D_norm` is used.
     - _Requirements: 6.6_
 

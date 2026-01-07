@@ -35,7 +35,6 @@ class TestSignedSoftThresholdSAE(unittest.TestCase):
             resample_latents_threshold=1,
             device="cpu",
         )
-        model.W_enc.data = torch.tensor([[[1.0, 0.0]]])
         model.W_dec.data = torch.tensor([[[1.0], [0.0]]])
         model.b_enc.data = torch.zeros_like(model.b_enc.data)
         model.b_dec.data = torch.zeros_like(model.b_dec.data)
@@ -58,7 +57,6 @@ class TestSignedSoftThresholdSAE(unittest.TestCase):
             resample_latents_threshold=1,
             device="cpu",
         )
-        model.W_enc.data = torch.zeros_like(model.W_enc.data)
         model.W_dec.data = torch.zeros_like(model.W_dec.data)
         model.b_enc.data = torch.zeros_like(model.b_enc.data)
         model.b_dec.data = torch.zeros_like(model.b_dec.data)
@@ -114,6 +112,41 @@ class TestSignedSoftThresholdSAE(unittest.TestCase):
         self.assertFalse(mask[0, 0].item())
         self.assertAlmostEqual(model.theta[0, 0].item(), 1.23, places=6)
 
+    def test_forward_is_scale_invariant_to_decoder_rescaling(self) -> None:
+        # given
+        model = SignedSoftThresholdSAE(
+            n_instances=1,
+            d_in=3,
+            d_hidden=2,
+            resample_latents_threshold=1,
+            device="cpu",
+        )
+        model.W_dec.data = torch.tensor(
+            [[[1.0, 0.0], [0.0, 2.0], [0.0, 1.0]]], dtype=torch.float32
+        )
+        model.b_enc.data = torch.zeros_like(model.b_enc.data)
+        model.b_dec.data = torch.zeros_like(model.b_dec.data)
+        model.theta.data = torch.zeros_like(model.theta.data)
+        x = torch.tensor(
+            [
+                [1.0, 2.0, 3.0],
+                [-1.0, 0.0, 2.0],
+                [0.5, -0.5, 1.0],
+                [0.0, 0.0, -4.0],
+            ],
+            dtype=torch.float32,
+        )
+        output_before = model(x)
+
+        # when
+        model.W_dec.data = model.W_dec.data * 7.0
+        output_after = model(x)
+
+        # then
+        torch.testing.assert_close(
+            output_before["x_hat"], output_after["x_hat"], rtol=1e-6, atol=1e-6
+        )
+
     def test_evaluation_runs_without_crashing(self) -> None:
         # given
         evaluation_config = PolarityDialEvaluationConfig(
@@ -133,7 +166,6 @@ class TestSignedSoftThresholdSAE(unittest.TestCase):
             resample_latents_threshold=1,
             device="cpu",
         )
-        model.W_enc.data = torch.tensor([[[1.0, 0.0]]])
         model.W_dec.data = torch.tensor([[[1.0], [0.0]]])
         model.b_enc.data = torch.zeros_like(model.b_enc.data)
         model.b_dec.data = torch.zeros_like(model.b_dec.data)

@@ -1,6 +1,5 @@
 from typing import Dict
 
-import einops
 import torch
 from torch import Tensor
 
@@ -25,11 +24,6 @@ class SignedSoftThresholdSAE(SAEBase):
             sign_aware=False,
         )
         self.signed_latents = True
-        self.W_enc = torch.nn.Parameter(
-            torch.nn.init.kaiming_uniform_(
-                torch.zeros(n_instances, d_hidden, d_in, device=device)
-            )
-        )
         self.theta = torch.nn.Parameter(
             torch.zeros(n_instances, d_hidden, device=device)
         )
@@ -41,25 +35,13 @@ class SignedSoftThresholdSAE(SAEBase):
         while x.ndim < 3:
             x = x.unsqueeze(0)
 
-        z = (
-            einops.einsum(
-                x - self.b_dec.unsqueeze(1),
-                self.W_enc,
-                "n_instances batch d_in, n_instances d_hidden d_in -> batch n_instances d_hidden",
-            )
-            + self.b_enc
-        )
+        W_dec_norm = self.W_dec / (self.W_dec.norm(dim=1, keepdim=True) + 1e-8)
+        x_centered = x - self.b_dec.unsqueeze(1)
+        z = torch.einsum("nbd,ndh->bnh", x_centered, W_dec_norm) + self.b_enc
         theta = torch.relu(self.theta)
         latents = torch.sign(z) * torch.relu(z.abs() - theta)
 
-        x_hat = (
-            einops.einsum(
-                self.W_dec,
-                latents,
-                "n_instances d_in d_hidden, batch n_instances d_hidden -> batch n_instances d_in",
-            )
-            + self.b_dec
-        )
+        x_hat = torch.einsum("ndh,bnh->bnd", W_dec_norm, latents) + self.b_dec
         return {
             "x_hat": x_hat.transpose(0, 1),
             "latents": latents.transpose(0, 1),
@@ -79,14 +61,8 @@ class SignedSoftThresholdSAE(SAEBase):
 
     def resample_dead_latents(self, inactive_latents_count: Tensor) -> Tensor:
         resample_latents_mask = super().resample_dead_latents(inactive_latents_count)
-        resample_latents_count = int(resample_latents_mask.sum().item())
-        if resample_latents_count == 0:
+        if int(resample_latents_mask.sum().item()) == 0:
             return resample_latents_mask
 
-        new_weights = torch.rand(resample_latents_count, self.d_in, device=self.device)
-        new_weights = (
-            1e-2 * new_weights / (new_weights.norm(dim=1, keepdim=True) + 1e-8)
-        )
-        self.W_enc.data[resample_latents_mask] = new_weights
         self.theta.data[resample_latents_mask] = 0.0
         return resample_latents_mask
