@@ -32,7 +32,11 @@ def _import_or_raise(module_name: str) -> ModuleType:
 def validate_polarity_dial_dependencies() -> None:
     _import_or_raise("torch")
     _import_or_raise("numpy")
-    _import_or_raise("matplotlib")
+    matplotlib = _import_or_raise("matplotlib")
+    try:
+        matplotlib.use("Agg")
+    except Exception:
+        pass
     _import_or_raise("matplotlib.pyplot")
 
     _import_or_raise("scipy")

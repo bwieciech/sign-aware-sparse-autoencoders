@@ -15,6 +15,8 @@ def set_random_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _sample_lognormal(
@@ -199,7 +201,11 @@ def export_data_summary(
     torch.save(data["feature_directions"].cpu(), feature_directions_path)
 
     coefficients = torch.cat(
-        (data["coefficients_train"], data["coefficients_val"], data["coefficients_test"]),
+        (
+            data["coefficients_train"],
+            data["coefficients_val"],
+            data["coefficients_test"],
+        ),
         dim=0,
     )
     coefficients_stats_path = os.path.join(data_dir, "coefficients_stats.json")
