@@ -239,21 +239,21 @@
     - Assert that per-model `calibration.json["summary"]` values match within tight tolerances.
     - _Requirements: 4.6_
 
-- [ ] 15. Add alignment-thresholded axis aggregation and axis coverage reporting
-  - [ ] 15.1 Add `min_axis_abs_cos` to `PolarityDialEvaluationConfig`
+- [x] 15. Add alignment-thresholded axis aggregation and axis coverage reporting
+  - [x] 15.1 Add `min_axis_abs_cos` to `PolarityDialEvaluationConfig`
     - Default to `0.9`.
     - Plumb through config loading and CLI so it is stored in `config.json`.
     - _Requirements: 3.2, 3.9_
-  - [ ] 15.2 Enforce `min_axis_abs_cos` in `axis_alignment.json`
+  - [x] 15.2 Enforce `min_axis_abs_cos` in `axis_alignment.json`
     - In `compute_axis_alignment`, after selecting `latent_pos`/`latent_neg`, set each side to `null` if its `axis_cos < min_axis_abs_cos`.
     - Ensure downstream coefficient aggregation treats null sides as zero contribution.
     - _Requirements: 3.2_
-  - [ ] 15.3 Compute and export axis coverage metrics
+  - [x] 15.3 Compute and export axis coverage metrics
     - In `axis_alignment.json`, add a `coverage_summary` object with counts:
       - total axes, axes with pos present, axes with neg present, axes with both, axes with neither.
     - Propagate these coverage numbers into `comparison_summary.json` for quick cross-model inspection.
     - _Requirements: 3.9, 5.2_
-  - [ ] 15.4 Add unit tests for thresholding and coverage
+  - [x] 15.4 Add unit tests for thresholding and coverage
     - Case 1: all decoder columns are random noise and should fall below threshold, coverage should be `neither == num_axes`.
     - Case 2: construct a model with one perfect `+u_j` and one imperfect `-u_j` below threshold, coverage should count only the positive side.
     - _Requirements: 3.2, 3.9_

@@ -177,6 +177,7 @@ class PolarityDialEvaluationConfig:
     alignment_mode: str = "axis_abs_cosine"
     axis_aggregation_for_nonnegative: bool = True
     normalize_decoder_for_eval: bool = True
+    min_axis_abs_cos: float = 0.9
     min_regime_samples: int = 50
     max_points_per_regime_scatter: int = 5000
 
@@ -186,6 +187,7 @@ class PolarityDialEvaluationConfig:
                 "alignment_mode must be one of {'axis_abs_cosine'}; received"
                 f" {self.alignment_mode}."
             )
+        _validate_probability(self.min_axis_abs_cos, "min_axis_abs_cos")
         _validate_positive_int(self.min_regime_samples, "min_regime_samples")
         _validate_positive_int(
             self.max_points_per_regime_scatter, "max_points_per_regime_scatter"

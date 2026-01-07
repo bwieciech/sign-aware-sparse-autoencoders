@@ -194,6 +194,7 @@ def _run_single_model(
             "d_hidden": int(model_config.d_hidden),
             "d_hidden_effective": d_hidden_effective,
             "parameter_count": parameter_count,
+            "coverage_summary": axis_alignment.get("coverage_summary"),
         },
     }
 

@@ -81,6 +81,42 @@ def align_decoder_and_features(
             best_neg = signed_cos_values[neg_candidates].argmin()
             neg_idx = int(neg_candidates[best_neg].item())
 
+        signed_cos_pos = (
+            None
+            if pos_idx is None
+            else float(signed_cosine_matrix[pos_idx, feature_index])
+        )
+        signed_cos_neg = (
+            None
+            if neg_idx is None
+            else float(signed_cosine_matrix[neg_idx, feature_index])
+        )
+        axis_cos_pos = (
+            None
+            if pos_idx is None
+            else float(axis_cosine_matrix[pos_idx, feature_index])
+        )
+        axis_cos_neg = (
+            None
+            if neg_idx is None
+            else float(axis_cosine_matrix[neg_idx, feature_index])
+        )
+
+        if (
+            axis_cos_pos is not None
+            and axis_cos_pos < evaluation_config.min_axis_abs_cos
+        ):
+            pos_idx = None
+            signed_cos_pos = None
+            axis_cos_pos = None
+        if (
+            axis_cos_neg is not None
+            and axis_cos_neg < evaluation_config.min_axis_abs_cos
+        ):
+            neg_idx = None
+            signed_cos_neg = None
+            axis_cos_neg = None
+
         match = feature_to_match.get(feature_index)
         axes.append(
             {
@@ -93,33 +129,34 @@ def align_decoder_and_features(
                 ),
                 "latent_pos": pos_idx,
                 "latent_neg": neg_idx,
-                "signed_cos_pos": (
-                    None
-                    if pos_idx is None
-                    else float(signed_cosine_matrix[pos_idx, feature_index])
-                ),
-                "signed_cos_neg": (
-                    None
-                    if neg_idx is None
-                    else float(signed_cosine_matrix[neg_idx, feature_index])
-                ),
-                "axis_cos_pos": (
-                    None
-                    if pos_idx is None
-                    else float(axis_cosine_matrix[pos_idx, feature_index])
-                ),
-                "axis_cos_neg": (
-                    None
-                    if neg_idx is None
-                    else float(axis_cosine_matrix[neg_idx, feature_index])
-                ),
+                "signed_cos_pos": signed_cos_pos,
+                "signed_cos_neg": signed_cos_neg,
+                "axis_cos_pos": axis_cos_pos,
+                "axis_cos_neg": axis_cos_neg,
             }
         )
 
+    axes_with_pos = sum(axis["latent_pos"] is not None for axis in axes)
+    axes_with_neg = sum(axis["latent_neg"] is not None for axis in axes)
+    axes_with_both = sum(
+        axis["latent_pos"] is not None and axis["latent_neg"] is not None
+        for axis in axes
+    )
+    axes_with_neither = sum(
+        axis["latent_pos"] is None and axis["latent_neg"] is None for axis in axes
+    )
     axis_alignment: Dict[str, Any] = {
         "alignment_mode": evaluation_config.alignment_mode,
         "eval_decoder_normalized": evaluation_config.normalize_decoder_for_eval,
+        "min_axis_abs_cos": float(evaluation_config.min_axis_abs_cos),
         "axes": axes,
+        "coverage_summary": {
+            "total_axes": len(axes),
+            "axes_with_pos": int(axes_with_pos),
+            "axes_with_neg": int(axes_with_neg),
+            "axes_with_both": int(axes_with_both),
+            "axes_with_neither": int(axes_with_neither),
+        },
     }
     return alignment, axis_alignment, decoder_directions
 
