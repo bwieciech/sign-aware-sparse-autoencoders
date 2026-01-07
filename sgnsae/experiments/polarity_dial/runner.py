@@ -17,6 +17,7 @@ from sgnsae.experiments.polarity_dial.data import (
     generate_polarity_dial_dataset,
     set_random_seed,
 )
+from sgnsae.experiments.polarity_dial.environment import persist_environment_metadata
 from sgnsae.experiments.polarity_dial.evaluation import (
     align_decoder_and_features,
     compute_alignment_and_calibration,
@@ -242,6 +243,7 @@ def run_polarity_dial_experiment(config_path: str) -> str:
     device = _resolve_device(raw_config.device)
     config = replace(raw_config, device=device)
     run_dir, run_id = _prepare_run_directory(config)
+    persist_environment_metadata(run_dir)
     _persist_run_config(config, run_dir)
 
     set_random_seed(config.data.seed)

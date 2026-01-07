@@ -56,6 +56,15 @@ class TestPolarityDialArtifactCompleteness(unittest.TestCase):
 
             # then
             self.assertTrue(os.path.isfile(os.path.join(run_dir, "config.json")))
+            environment_path = os.path.join(run_dir, "environment.json")
+            self.assertTrue(os.path.isfile(environment_path))
+            self.assertGreater(os.path.getsize(environment_path), 0)
+            with open(environment_path, "r") as f:
+                environment_metadata = json.load(f)
+            self.assertIn("python", environment_metadata)
+            self.assertIn("os", environment_metadata)
+            self.assertIn("torch", environment_metadata)
+            self.assertIn("dependencies", environment_metadata)
             self.assertTrue(
                 os.path.isfile(os.path.join(run_dir, "comparison_summary.json"))
             )
@@ -160,6 +169,9 @@ class TestPolarityDialArtifactCompleteness(unittest.TestCase):
             run_dir = run_polarity_dial_experiment(config_path)
 
             # then
+            environment_path = os.path.join(run_dir, "environment.json")
+            self.assertTrue(os.path.isfile(environment_path))
+            self.assertGreater(os.path.getsize(environment_path), 0)
             self.assertTrue(
                 os.path.isfile(os.path.join(run_dir, "mse_vs_l0_tradeoff.json"))
             )

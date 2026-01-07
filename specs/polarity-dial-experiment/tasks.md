@@ -271,29 +271,27 @@
     - Create a `SignedSoftThresholdSAE`, scale its raw `W_dec` by a constant factor, and assert that reconstructions stay the same (within tolerance) if `D_norm` is used.
     - _Requirements: 6.6_
 
-- [ ] 17. Add environment metadata and dependency validation artifacts
-  - [ ] 17.1 Write `environment.json` at run start
+- [x] 17. Add environment metadata and dependency validation artifacts
+  - [x] 17.1 Write `environment.json` at run start
     - Capture: Python version, OS, torch version, CUDA availability, GPU name (if available), and key library versions (numpy, scipy, matplotlib, einops).
     - _Requirements: 7.2_
-  - [ ] 17.2 Fail fast with clear dependency errors
+  - [x] 17.2 Fail fast with clear dependency errors
     - At CLI startup, validate that required imports work and that required APIs exist (e.g., `scipy.optimize.linear_sum_assignment`).
     - If using `einops.einsum` anywhere, validate `hasattr(einops, "einsum")`.
     - _Requirements: 7.1_
-  - [ ] 17.3 Extend smoke tests to include `environment.json`
+  - [x] 17.3 Extend smoke tests to include `environment.json`
     - Update the artifact completeness test to assert `<run_dir>/environment.json` exists and is non-empty.
     - _Requirements: 7.2_
 
-- [ ] 18. Bring README + configs back into sync
-  - [ ] 18.1 Update README model list to match checked-in paper configs
+- [x] 18. Bring README + configs back into sync
+  - [x] 18.1 Update README model list to match checked-in paper configs
     - Ensure README reflects that the default `polarity_dial_paper_seed*.json` configs train 6 models (including 2x-width baselines and the signed soft-threshold baseline).
     - Fix model naming (`signed_soft_threshold`, not `signed_soft_threshold_sae`).
     - _Requirements: 4.1, 5.2_
-  - [ ] 18.2 Document `min_axis_abs_cos` and per-model seeding
+  - [x] 18.2 Document `min_axis_abs_cos` and per-model seeding
     - Add a short explanation of the alignment threshold and why it exists (prevents spurious axis aggregation).
     - Document that each model uses a derived `model_seed` so results do not depend on config ordering.
     - _Requirements: 3.2, 4.6_
-
-
 
 - [ ] 19. Post-fix rerun and sanity checks (not paper Section 6 yet)
   - [ ] 19.1 Rerun the three canonical paper seeds with the updated pipeline

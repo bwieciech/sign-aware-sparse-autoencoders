@@ -27,11 +27,11 @@ You will run three configs, one per seed:
 Each config trains the following model variants (this is the default set used for paper-quality Protocol A comparisons):
 
 - `relu_sae` (SAE, non-gated baseline, width = num_features)
+- `relu_sae_2x` (SAE, width doubled to allow separate +u_j and -u_j atoms)
 - `gated_sae` (GatedSAE, sign_aware=false, width = num_features)
+- `gated_sae_2x` (GatedSAE, sign_aware=false, width doubled)
 - `signed_soft_threshold` (SignedSoftThresholdSAE, signed-latent baseline, width = num_features)
 - `sign_aware_gated_sae` (GatedSAE, sign_aware=true, width = num_features)
-- `relu_sae_2x` (SAE, width doubled to allow separate +u_j and -u_j atoms)
-- `gated_sae_2x` (GatedSAE, sign_aware=false, width doubled)
 
 If you only want the “core three” models (relu_sae, gated_sae, sign_aware_gated_sae), remove the *_2x variants and signed_soft_threshold from the config.
 
@@ -44,8 +44,8 @@ Notes:
 - `device: "auto"` uses CUDA if available, otherwise CPU.
 - If you need CPU only, set `"device": "cpu"` in the config.
 
-- Axis-aware evaluation uses `evaluation.min_axis_abs_cos` (default 0.9) to ignore spurious weak matches when aggregating + and - atoms for non-negative models.
-- For reproducibility, each model is trained with a deterministic per-model seed derived from (data.seed, model.name); this is logged in `training_metrics.json`.
+- Axis-aware evaluation uses `evaluation.min_axis_abs_cos` (default 0.9) to prevent spurious axis aggregation: any +/- atom below the threshold is treated as absent for that axis.
+- For reproducibility, each model is trained with a deterministic per-model seed derived from (data.seed, model.name), so results do not depend on model ordering; this is logged in `training_metrics.json`.
 
 ### 2) Run the experiments
 
