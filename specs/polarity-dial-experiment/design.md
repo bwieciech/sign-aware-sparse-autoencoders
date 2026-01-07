@@ -58,31 +58,28 @@ Configurations are modeled as dataclasses (or Pydantic models if strict validati
   - `noise_std: float` (\(\sigma\); standard deviation of Gaussian noise added to each sample)
 
 - `PolarityDialModelVariantConfig`:
-  - `name: str` (e.g., `"relu_sae"`, `"gated_sae"`, `"sign_aware_gated_sae"`)
-  - `sae_class: str` (`"SAE"` or `"GatedSAE"`)
-  - `variant_family: str` (one of: `"relu"`, `"gated"`, `"sign_aware_gated"`, `"signed_soft_threshold"`)
-  - `sign_aware: bool`
-  - `signed_latents: bool` (true for signed-latent baselines that support negative coefficients without paired atoms)
-  - `width_multiplier: int` (default 1; use 2 for `2x_width` baselines)
-  - `single_activation_offset: bool`
-  - `reset_activation_offsets_on_resample: bool`
+  - `name: str` (unique run name, used for directory naming)
+  - `sae_class: str` (`"SAE"`, `"GatedSAE"`, `"SignedSoftThresholdSAE"`)
+  - `sign_aware: bool` (for GatedSAE only)
+  - `symmetric_magnitude: bool` (optional ablation for sign-aware GatedSAE)
+  - `single_activation_offset: bool` (for sign-aware GatedSAE only)
+  - `reset_activation_offsets_on_resample: bool` (for sign-aware GatedSAE only)
+  - `resample_latents_epochs: Optional[int]` (optional; resample “dead” latents every N epochs)
   - `d_hidden: int` (dictionary width)
-  - `sparsity_coeff: float` (single value for this experiment; grid search is not the focus here)
+  - `sparsity_coeff: float` (lambda for sparsity)
   - `learning_rate: float`
   - `num_epochs: int`
   - `batch_size: int`
   - `adam_betas: Tuple[float, float]`
+  - NOTE: “2x width baselines” are represented as separate model entries with `d_hidden = 2 * num_features`.
 
 - `PolarityDialEvaluationConfig`:
-  - `alignment_mode: str` (default `"axis_abs_cosine"`)
-    - `"axis_abs_cosine"`: match using \(|\cos(D_{:,i}, u_j)|\) and record the sign.
-  - `axis_aggregation_for_nonnegative: bool` (default `true`)
-    - If true, allow up to two latents to represent one axis in non-negative models (one aligned to \(+u_j\), one aligned to \(-u_j\)).
-  - `normalize_decoder_for_eval: bool` (default `true`)
-    - If true, evaluate with unit-norm decoder columns so calibration metrics are scale-consistent.
-  - `min_regime_samples: int` (default `50`)
-    - Minimum count per regime (positive or negative) required to fit \(\gamma\) for that regime.
-  - `max_points_per_regime_scatter: int` (default `5000`)
+  - `alignment_mode: str` (e.g., `"axis_aware_abs_cos"`)
+  - `axis_aggregation_for_nonnegative: bool` (whether to aggregate +/- latents for non-negative models)
+  - `normalize_decoder_for_eval: bool` (whether to use normalized decoder columns in cosine computations)
+  - `min_axis_abs_cos: float` (minimum absolute cosine required to accept a latent as representing an axis in axis-aggregation mode, default `0.9`)
+  - `min_regime_samples: int` (minimum samples in a regime to compute \(\gamma_+\) or \(\gamma_-\))
+  - `max_points_per_regime_scatter: int` (subsample points for scatter plots)
 
 - `PolarityDialSweepConfig`:
   - `sparsity_coeff_grid: List[float]` (optional; if provided, run MSE vs \(L_0\) sweeps)
@@ -93,7 +90,7 @@ Configurations are modeled as dataclasses (or Pydantic models if strict validati
 
 - `PolarityDialExperimentConfig`:
   - `output_dir: str`
-  - `device: Literal["cpu", "cuda"]` (with `"cuda"` chosen automatically if available unless overridden)
+  - `device: str` (`"auto"`, `"cpu"`, `"cuda"`)
   - `data: PolarityDialDataConfig`
   - `models: List[PolarityDialModelVariantConfig]`
   - `evaluation: PolarityDialEvaluationConfig`
@@ -141,7 +138,12 @@ Random seeds:
   - Feature directions.
   - All Bernoulli draws (`active_j`, `s_j`).
   - All magnitude draws and noise.
-- Training and evaluation use deterministic seeding (`torch.manual_seed`, `numpy.random.seed`) per run to ensure reproducibility.
+
+- Additionally, each *model variant* is trained with a deterministic *per-model seed* derived from `(data.seed, model_config.name)`:
+  - This prevents “model ordering” effects when multiple models are trained in the same run (RNG state should not leak across models).
+  - Recommended implementation: `model_seed = stable_hash(f\"{data.seed}:{model_name}\") % 2**31`.
+  - The runner reseeds (Python, NumPy, Torch CPU, Torch CUDA) immediately before instantiating and training each model.
+  - The derived `model_seed` is persisted in per-model artifacts (`training_metrics.json`).
 
 Splits:
 - Generation uses disjoint random draws for train, validation, and test sets.
@@ -155,6 +157,8 @@ Responsibilities:
 - Wrap the synthetic data in `TensorDataset`/`DataLoader` instances.
 - Instantiate SAE variants using `PolarityDialModelVariantConfig`.
 - Reuse `instantiate_model`, `run_training_step`, and related utilities from `sgnsae.scripts.train_sparse_autoencoder` where possible, but operate directly on tensors instead of JSON embeddings.
+- Ensure deterministic DataLoader shuffling per model by passing an explicit `generator` seeded with `model_seed`.
+- Persist `model_seed` so the run can be reproduced without relying on global RNG state.
 
 Key function:
 
@@ -178,6 +182,10 @@ Model widths:
   - For ReLU SAE: `sign_aware=False`.
   - For standard Gated SAE: `sae_class="GatedSAE"`, `sign_aware=False`.
   - For Sign-Aware Gated SAE: `sae_class="GatedSAE"`, `sign_aware=True`, `single_activation_offset=False` (dual offsets to emulate Bi-Jump dead zone), `reset_activation_offsets_on_resample=True`.
+
+  - For SignedSoftThreshold SAE (signed-latent baseline):
+    - `sae_class="SignedSoftThresholdSAE"` (or equivalent).
+    - The implementation MUST be scale-invariant: use a normalized decoder `D_norm` in forward pass and compute `z = D_norm^T (x - b_dec) + b_enc` (or an equivalent tied parameterization) before soft-thresholding.
 
 ### Evaluation and Calibration Component
 
@@ -206,7 +214,7 @@ Axis-aware alignment:
    - For each axis `j`, select up to two latents:
      - `i_pos`: the best latent with `S_signed[i, j] >= 0` (aligned with `+u_j`),
      - `i_neg`: the best latent with `S_signed[i, j] < 0` (aligned with `-u_j`),
-     - subject to a configurable minimum alignment threshold (default `axis_cos >= 0.9`).
+     - subject to `evaluation.min_axis_abs_cos` (default `0.9`).
    - This mapping is many-to-one: two latents may map to the same axis.
    - Store this mapping in `axis_alignment.json` (per axis: `latent_pos`, `latent_neg`, and their cosine values).
 
@@ -220,14 +228,14 @@ We compute axis-level predicted coefficients \(\hat{c}_j(x)\) on a held-out spli
    - For each axis `j`, choose its matched latent `i` from the one-to-one axis matching.
    - Let `a_i(x)` be the scalar activation for latent `i`.
    - Define:
-     - `hat_c_j(x) = a_i(x) * sign(S_signed[i, j])`
+     - `hat_c_j(x) = a_i(x) * S_signed[i, j]`
      - This corrects for cases where the decoder column is aligned to \(-u_j\) rather than \(+u_j\).
    - Record the sign correction factor per axis in `axis_alignment.json`.
 
 3. Predicted coefficients for non-negative models (axis aggregation mode):
    - For each axis `j`, use `(i_pos, i_neg)` from `axis_alignment.json` when available.
    - Compute:
-     - `hat_c_j(x) = a_{i_pos}(x) - a_{i_neg}(x)`
+     - `hat_c_j(x) = a_{i_pos}(x) * S_signed[i_pos, j] + a_{i_neg}(x) * S_signed[i_neg, j]`
    - If only one of `i_pos` or `i_neg` is available, treat the missing side as zero.
    - This credits baselines that allocate separate atoms to \(+u_j\) and \(-u_j\).
 
@@ -366,7 +374,12 @@ Structure:
 1. Configuration:
    - File: `config.json`
    - Contents:
-     - Serialized `PolarityDialExperimentConfig`, including nested `data` and `models` sections.
+     - Serialized `PolarityDialExperimentConfig`, including nested `data`, `models`, `evaluation`, and optional `sweeps` sections.
+
+2. Environment metadata:
+   - File: `environment.json`
+   - Contents:
+     - Python version, OS, torch version, CUDA availability, and key library versions (numpy, scipy, matplotlib, einops).
 
 2. Data summary:
    - Directory: `data/`
@@ -384,17 +397,15 @@ Structure:
      - `model_config.json`: serialized `PolarityDialModelVariantConfig`.
      - `model.pt`: serialized model (`torch.save`).
      - `training_metrics.json`:
+       - `model_seed`: int (derived seed used for this model variant)
        - `epoch`: list[int]
        - `loss_total`: list[float]
        - `loss_reconstruction`: list[float]
        - `loss_sparsity`: list[float]
        - Any additional SAE-specific metrics (e.g., mean active latents).
     - `alignment.json`:
-      - `matched_pairs`: list of objects with:
-        - `latent_index: int`
-        - `feature_index: int`
-        - `cosine_similarity: float`
-      - `unmatched_latents`: list of latent indices not matched (if any).
+      - `alignment_mode`: e.g., `"axis_aware_abs_cos"`
+      - `pairs`: list of `{latent_index, feature_index, signed_cosine}`
     - `axis_alignment.json`:
       - `axes`: list of objects with:
         - `feature_index: int`
@@ -405,6 +416,8 @@ Structure:
         - `axis_cos_pos: float | null`
         - `axis_cos_neg: float | null`
       - `eval_decoder_normalized: bool`
+      - `min_axis_abs_cos`: float (threshold used to accept a latent for an axis side)
+      - `coverage_summary`: object with counts/fractions for pos/neg/both/neither coverage
     - `calibration.json`:
       - `per_pair`: list of objects with:
         - `latent_index: int`
@@ -465,6 +478,9 @@ All JSON files use snake_case keys for consistency with the Python config datacl
 - Configuration validation:
   - Invalid or inconsistent configurations (e.g., negative `activation_prob`, `num_features > input_dim`) should raise `ValueError` with clear messages before any computation.
   - Missing required config fields should be caught when parsing the configuration file.
+
+- Dependency validation:
+  - Fail fast if required optional dependencies are missing (e.g., `einops.einsum` if used), with a clear error message pointing to installing `requirements.txt`.
 - Data generation:
   - If `num_train`, `num_val`, or `num_test` is zero or negative, raise `ValueError`.
   - If `noise_std < 0`, raise `ValueError`.
@@ -501,5 +517,16 @@ Tests will be implemented using `pytest` in the `tests/` package, focusing on:
 4. Error handling tests:
    - Ensure invalid configurations raise the expected exceptions with informative messages.
    - Ensure that evaluation gracefully handles regimes with too few samples by emitting `null` for missing gamma values.
+
+5. Reproducibility tests (order independence):
+   - Run the same tiny config twice with the model list permuted.
+   - Assert per-model summaries match within tolerances.
+
+6. Scale-invariance tests for SignedSoftThreshold baseline:
+   - Scale the raw decoder weights by a constant factor.
+   - Assert reconstructions and calibration metrics are unchanged (within tolerance) when using `D_norm`.
+
+7. Environment artifact tests:
+   - Assert `environment.json` exists and contains expected keys.
 
 This testing strategy is designed to give high confidence that the Protocol A implementation correctly generates data, trains models, computes calibration metrics, and writes outputs in the expected structure.

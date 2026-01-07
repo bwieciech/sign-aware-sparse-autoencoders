@@ -49,6 +49,8 @@ This document captures the requirements for implementing Protocol A (the "Polari
 2. WHEN evaluating a non-negative model (ReLU SAE or non-sign-aware Gated SAE), THEN the system SHALL support an axis-level aggregation mode:
    - It SHALL allow up to two latents to be assigned to a single ground-truth axis (one aligned to \(+u_j\), one aligned to \(-u_j\)), and it SHALL compute an axis-level coefficient estimate \(\hat{c}_j(x)\) by combining both contributions.
    - It SHALL store the per-axis mapping in an artifact (e.g., `axis_alignment.json`) distinct from one-to-one latent matching.
+   - It SHALL treat a candidate latent as *unassigned* if its absolute cosine alignment to the axis is below a configurable threshold (`min_axis_abs_cos`, default `0.9`), so that weak/noisy matches cannot create misleading “negative-regime” calibration for non-negative models.
+   - It SHALL treat any missing side (no latent above threshold) as a zero contribution during axis-level coefficient aggregation.
 3. WHEN an alignment is available, THEN the system SHALL compute, for each ground-truth axis \(j\), the ground-truth scalar coefficients \(c_j(x)\) and the model’s scalar estimates \(\hat{c}_j(x)\) using a scale-consistent method:
    - EITHER normalize decoder columns for evaluation, OR compute coefficients via a projection that is invariant to decoder scaling, and record which method is used.
 4. WHEN evaluating calibration, THEN the system SHALL estimate separate least-squares scaling factors \(\gamma_+\) and \(\gamma_-\) for the positive and negative halves of the data, respectively, as defined in Protocol A, at the axis level (not only the latent level).
@@ -63,6 +65,9 @@ This document captures the requirements for implementing Protocol A (the "Polari
 7. IF a regime for a given axis has too few samples (configurable threshold, default 50), THEN the system SHALL skip \(\gamma\) fitting for that regime for that axis and record `null` for the missing values, while still reporting other available metrics.
 8. IF the user requests diagnostic plots, THEN the system SHALL be able to generate plots that reveal metric fragility (e.g., predicted-vs-true scatter per regime, and histograms of coefficient predictions showing near-zero collapse).
 
+9. WHEN axis-level aggregation is used, THEN the system SHALL report axis coverage diagnostics including the number and fraction of ground-truth axes that have:
+   - a valid positive-side latent, a valid negative-side latent, both, and neither (at the configured `min_axis_abs_cos` threshold).
+
 ### Requirement 4: Experiment configuration, reproducibility, and CLI interface
 
 **User Story:** As a practitioner running experiments, I want a simple command-line interface and configuration mechanism for Protocol A, so that I can easily reproduce runs and sweep over key parameters without modifying code.
@@ -74,6 +79,8 @@ This document captures the requirements for implementing Protocol A (the "Polari
 3. IF the same configuration (including seed) is used in a subsequent run, THEN the system SHALL reproduce identical synthetic data and training behavior within numerical tolerances of the underlying frameworks.
 4. WHEN multiple model variants are requested in a single run (e.g., baseline vs. sign-aware model), THEN the system SHALL train and evaluate each variant under the same dataset and configuration, writing results to separate, clearly named subdirectories.
 5. IF the configuration requests sweeps (over sparsity strengths and/or data asymmetry parameters), THEN the system SHALL run the sweep deterministically and produce a single aggregated summary artifact that includes all sweep points.
+
+6. WHEN training multiple model variants in the same run, THEN the system SHALL reseed all relevant RNGs deterministically per model (Python, NumPy, Torch CPU, Torch CUDA) using a stable function of the dataset seed and the model name, so that a model’s results do not depend on the ordering of models in the config. The derived per-model seed SHALL be recorded in per-model artifacts.
 
 ### Requirement 5: Metrics reporting and comparison for Protocol A
 
@@ -104,3 +111,15 @@ This document captures the requirements for implementing Protocol A (the "Polari
    - sign probability \(p_+\),
    - and at least one tail-heaviness control (e.g., `exponential_lambda` and/or `lognormal_sigma`).
 5. WHEN reporting cross-model comparisons, THEN the system SHALL include model width and an approximate parameter count, so that comparisons can be interpreted under capacity constraints.
+
+6. WHEN using a signed-latent baseline (e.g., Signed Soft-Threshold SAE), THEN the baseline encoder/decoder parameterization SHALL be scale-invariant (e.g., normalize decoder columns in the forward pass and compute encoder projections against the normalized decoder), so that calibration metrics cannot be improved or degraded by trivial rescaling of encoder/decoder weights.
+
+### Requirement 7: Dependency robustness and environment metadata
+
+**User Story:** As a practitioner reproducing results, I want runs to fail fast with clear dependency errors and to record environment metadata, so I can reproduce results and debug issues without guesswork.
+
+#### Acceptance Criteria
+
+1. WHEN the Protocol A runner starts, THEN it SHALL validate that required dependencies are available in compatible versions (at minimum: PyTorch, NumPy, SciPy, Matplotlib; and Einops *if* the codebase uses `einops.einsum`).
+2. IF a required API is missing (e.g., `einops.einsum`), THEN the system SHALL raise a clear error message explaining exactly what to install (e.g., “install `requirements.txt`”) rather than failing with an opaque stack trace.
+3. WHEN a run begins, THEN the system SHALL write an `environment.json` artifact capturing: Python version, OS, Torch version, CUDA availability, and key library versions (numpy, scipy, matplotlib, einops), to support reproducibility audits.

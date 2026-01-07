@@ -119,43 +119,19 @@
     - Ensure these parameters are documented in the config file and that the CLI can run directly against this configuration without modification.
     - _Requirements: 1.1, 1.2, 1.3, 4.1, 4.2_
   - [x] 8.2 Define canonical model and training parameters for paper results
-    - In the same `polarity_dial_paper.json` configuration, define three model variants with the following EXACT hyperparameters:
-      - Model 1 (ReLU SAE baseline):
-        - `name = "relu_sae"`
-        - `sae_class = "SAE"`
-        - `sign_aware = false`
-        - `single_activation_offset = false`
-        - `reset_activation_offsets_on_resample = false`
-        - `d_hidden = 128`
-        - `sparsity_coeff = 0.001`
-        - `learning_rate = 0.0001`
-        - `num_epochs = 50`
-        - `batch_size = 1024`
-        - `adam_betas = [0.9, 0.999]`
-      - Model 2 (Standard Gated SAE):
-        - `name = "gated_sae"`
-        - `sae_class = "GatedSAE"`
-        - `sign_aware = false`
-        - `single_activation_offset = false`
-        - `reset_activation_offsets_on_resample = false`
-        - `d_hidden = 128`
-        - `sparsity_coeff = 0.001`
-        - `learning_rate = 0.0001`
-        - `num_epochs = 50`
-        - `batch_size = 1024`
-        - `adam_betas = [0.9, 0.999]`
-      - Model 3 (Sign-Aware Gated SAE):
-        - `name = "sign_aware_gated_sae"`
-        - `sae_class = "GatedSAE"`
-        - `sign_aware = true`
-        - `single_activation_offset = false`
-        - `reset_activation_offsets_on_resample = true`
-        - `d_hidden = 128`
-        - `sparsity_coeff = 0.001`
-        - `learning_rate = 0.0001`
-        - `num_epochs = 50`
-        - `batch_size = 1024`
-        - `adam_betas = [0.9, 0.999]`
+    - In the provided `polarity_dial_paper_seed*.json` configurations, define the canonical model set (including reviewer-grade baselines) with the exact hyperparameters checked into the repo:
+      - Baselines and main model (trained per seed):
+        - `relu_sae` (SAE, non-gated, non-negative)
+        - `gated_sae` (GatedSAE, non-negative)
+        - `signed_soft_threshold` (SignedSoftThresholdSAE, signed-latent shrinkage baseline)
+        - `sign_aware_gated_sae` (GatedSAE, sign_aware=true)
+      - Reviewer-grade width baselines (to control for the two-atoms-per-axis confound):
+        - `relu_sae_2x` (SAE, d_hidden = 2 * num_features)
+        - `gated_sae_2x` (GatedSAE, d_hidden = 2 * num_features)
+      - All models SHOULD share the same optimizer and training schedule unless explicitly sweeping:
+        - `learning_rate`, `num_epochs`, `batch_size`, `adam_betas`, and `sparsity_coeff`.
+      - Optional ablation (recommended for paper-quality evidence):
+        - `sign_aware_gated_sae_symmetric_mag` (GatedSAE, sign_aware=true, symmetric_magnitude=true)
     - Set `output_dir` in the experiment config to a path such as `"assets/polarity_dial_paper"` and default `device` to `"cuda"` when available, otherwise `"cpu"`.
     - _Requirements: 2.1, 2.2, 4.1, 4.2_
   - [x] 8.3 Document exact paper run commands
@@ -169,7 +145,7 @@
 - [x] 9. Fix evaluation fairness: axis-aware alignment and non-negative axis aggregation
   - [x] 9.1 Add evaluation config and plumb it through the CLI
     - Add `PolarityDialEvaluationConfig` to the experiment config with fields:
-      - `alignment_mode`, `axis_aggregation_for_nonnegative`, `normalize_decoder_for_eval`, `min_regime_samples`, `max_points_per_regime_scatter`.
+      - `alignment_mode`, `axis_aggregation_for_nonnegative`, `normalize_decoder_for_eval`, `min_axis_abs_cos`, `min_regime_samples`, `max_points_per_regime_scatter`.
     - Default to axis-aware alignment and decoder normalization for evaluation.
     - _Requirements: 3.1, 3.2, 4.1_
   - [x] 9.2 Implement axis-aware matching (abs-cosine + signed bookkeeping)
@@ -182,7 +158,8 @@
     - For non-negative models, build `axis_alignment.json` with up to two latents per axis:
       - `latent_pos`: best latent with positive signed cosine to `u_j`
       - `latent_neg`: best latent with negative signed cosine to `u_j`
-    - Implement `hat_c_j(x)=a_pos(x)-a_neg(x)` at the axis level (missing side treated as zero).
+    - Implement `hat_c_j(x)=a_pos(x)*S_signed[i_pos,j] + a_neg(x)*S_signed[i_neg,j]` at the axis level (missing side treated as zero).
+    - Enforce `min_axis_abs_cos`: if `abs(S_signed[i_pos,j]) < min_axis_abs_cos`, set `latent_pos=null` and treat as zero contribution (same for `latent_neg`).
     - Add a unit test where a baseline model has two perfect atoms `+u_j` and `-u_j` and confirm \(\gamma_+\approx 1\), \(\gamma_-\approx 1\) under aggregation.
     - _Requirements: 3.2, 3.3_
   - [x] 9.4 Add robust per-regime diagnostics to `calibration.json`
@@ -196,9 +173,12 @@
     - Ensure parameter count and width are recorded in `model_config.json` and in `comparison_summary.json`.
     - _Requirements: 6.1, 6.2, 6.5_
   - [x] 10.2 Add a signed-latent baseline (soft-threshold / signed shrinkage)
-    - Implement a simple signed sparse-coding style encoder baseline:
-      - activation `a = sign(z) * ReLU(|z| - theta)` (soft-threshold) where `z = W_enc (x - mu) + b`.
-      - decoder `x_hat = D a + b_dec`, trained with reconstruction + \(\ell_1\) penalty on `a`.
+    - Implement a simple signed sparse-coding style encoder baseline (scale-invariant):
+      - Use a normalized decoder `D_norm` (columnwise unit norm) in the forward pass.
+      - Compute encoder projections against the normalized decoder (tied direction) to avoid trivial rescaling:
+        - `z = D_norm^T (x - b_dec) + b_enc` (or an equivalent tied parameterization).
+      - Activation: `a = sign(z) * ReLU(|z| - theta)` (soft-threshold), with a learned per-latent threshold `theta >= 0`.
+      - Decoder: `x_hat = D_norm a + b_dec`, trained with reconstruction + \(\ell_1\) penalty on `a`.
     - Integrate it into the shared training loop and evaluation outputs as `"signed_soft_threshold"`.
     - Add minimal tests ensuring it can produce negative coefficients and that evaluation does not crash.
     - _Requirements: 6.1, 6.2_
@@ -239,3 +219,87 @@
   - [x] 13.2 Create missing artifacts
     - For any of the above files detected as not being produced, add the necessary code to create them as specified in the design.
     - _Requirements: 4.5, 5.1, 6.3, 6.4_
+
+
+- [ ] 14. Fix per-model reproducibility in the main (non-sweep) runner
+  - [ ] 14.1 Deterministic per-model seeding (order-independent)
+    - In `sgnsae.experiments.polarity_dial.runner`, derive a `model_seed` for each model as a stable function of `(data.seed, model_config.name)` (e.g., `sha256(f"{seed}:{name}").hexdigest()` truncated to 31 bits).
+    - Call the existing `set_random_seed(model_seed)` immediately before:
+      - Instantiating the model,
+      - Creating the DataLoader (so shuffling is deterministic), and
+      - Entering the training loop.
+    - Persist `model_seed` into `models/<model_name>/training_metrics.json`.
+    - _Requirements: 4.6, 5.2_
+  - [ ] 14.2 Deterministic DataLoader shuffling per model
+    - Pass an explicit `generator=torch.Generator().manual_seed(model_seed)` to the DataLoader used for training.
+    - Ensure the generator is created on CPU (PyTorch DataLoader expects a CPU generator).
+    - _Requirements: 4.6_
+  - [ ] 14.3 Add a regression test for order independence
+    - Construct a tiny config with 2-3 models, run the experiment twice with the model list permuted.
+    - Assert that per-model `calibration.json["summary"]` values match within tight tolerances.
+    - _Requirements: 4.6_
+
+- [ ] 15. Add alignment-thresholded axis aggregation and axis coverage reporting
+  - [ ] 15.1 Add `min_axis_abs_cos` to `PolarityDialEvaluationConfig`
+    - Default to `0.9`.
+    - Plumb through config loading and CLI so it is stored in `config.json`.
+    - _Requirements: 3.2, 3.9_
+  - [ ] 15.2 Enforce `min_axis_abs_cos` in `axis_alignment.json`
+    - In `compute_axis_alignment`, after selecting `latent_pos`/`latent_neg`, set each side to `null` if its `axis_cos < min_axis_abs_cos`.
+    - Ensure downstream coefficient aggregation treats null sides as zero contribution.
+    - _Requirements: 3.2_
+  - [ ] 15.3 Compute and export axis coverage metrics
+    - In `axis_alignment.json`, add a `coverage_summary` object with counts:
+      - total axes, axes with pos present, axes with neg present, axes with both, axes with neither.
+    - Propagate these coverage numbers into `comparison_summary.json` for quick cross-model inspection.
+    - _Requirements: 3.9, 5.2_
+  - [ ] 15.4 Add unit tests for thresholding and coverage
+    - Case 1: all decoder columns are random noise and should fall below threshold, coverage should be `neither == num_axes`.
+    - Case 2: construct a model with one perfect `+u_j` and one imperfect `-u_j` below threshold, coverage should count only the positive side.
+    - _Requirements: 3.2, 3.9_
+
+- [ ] 16. Make the SignedSoftThreshold baseline stable and comparable
+  - [ ] 16.1 Normalize the decoder and tie the projection
+    - Update `SignedSoftThresholdSAE.forward` to normalize decoder columns (like `SAE.forward`) and use the normalized decoder for both encoding and decoding.
+    - This prevents trivial reparameterizations that can distort calibration metrics.
+    - _Requirements: 6.6_
+  - [ ] 16.2 Remove (or guard) the `einops.einsum` dependency in the baseline
+    - Preferred: replace `einops.einsum` usage with `torch.einsum` in `SignedSoftThresholdSAE` (and optionally other model classes).
+    - If not replacing, add an explicit version check at startup that raises a clear error if `einops.einsum` is unavailable.
+    - _Requirements: 7.1_
+  - [ ] 16.3 Add a scale-invariance unit test
+    - Create a `SignedSoftThresholdSAE`, scale its raw `W_dec` by a constant factor, and assert that reconstructions stay the same (within tolerance) if `D_norm` is used.
+    - _Requirements: 6.6_
+
+- [ ] 17. Add environment metadata and dependency validation artifacts
+  - [ ] 17.1 Write `environment.json` at run start
+    - Capture: Python version, OS, torch version, CUDA availability, GPU name (if available), and key library versions (numpy, scipy, matplotlib, einops).
+    - _Requirements: 7.2_
+  - [ ] 17.2 Fail fast with clear dependency errors
+    - At CLI startup, validate that required imports work and that required APIs exist (e.g., `scipy.optimize.linear_sum_assignment`).
+    - If using `einops.einsum` anywhere, validate `hasattr(einops, "einsum")`.
+    - _Requirements: 7.1_
+  - [ ] 17.3 Extend smoke tests to include `environment.json`
+    - Update the artifact completeness test to assert `<run_dir>/environment.json` exists and is non-empty.
+    - _Requirements: 7.2_
+
+- [ ] 18. Bring README + configs back into sync
+  - [ ] 18.1 Update README model list to match checked-in paper configs
+    - Ensure README reflects that the default `polarity_dial_paper_seed*.json` configs train 6 models (including 2x-width baselines and the signed soft-threshold baseline).
+    - Fix model naming (`signed_soft_threshold`, not `signed_soft_threshold_sae`).
+    - _Requirements: 4.1, 5.2_
+  - [ ] 18.2 Document `min_axis_abs_cos` and per-model seeding
+    - Add a short explanation of the alignment threshold and why it exists (prevents spurious axis aggregation).
+    - Document that each model uses a derived `model_seed` so results do not depend on config ordering.
+    - _Requirements: 3.2, 4.6_
+
+
+
+- [ ] 19. Post-fix rerun and sanity checks (not paper Section 6 yet)
+  - [ ] 19.1 Rerun the three canonical paper seeds with the updated pipeline
+    - Run the three `polarity_dial_paper_seed*.json` configs.
+    - Verify artifacts are complete and `comparison_summary.json` includes:
+      - axis coverage diagnostics (`coverage_summary`), and
+      - per-model `model_seed` entries.
+    - Spot-check that non-negative baselines no longer appear artificially well-calibrated on the negative regime when they do not have a valid `latent_neg` above threshold.
+    - _Requirements: 5.1, 5.2_
