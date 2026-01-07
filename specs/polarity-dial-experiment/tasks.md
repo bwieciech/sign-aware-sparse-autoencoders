@@ -293,8 +293,8 @@
     - Document that each model uses a derived `model_seed` so results do not depend on config ordering.
     - _Requirements: 3.2, 4.6_
 
-- [ ] 19. Post-fix rerun and sanity checks (not paper Section 6 yet)
-  - [ ] 19.1 Rerun the three canonical paper seeds with the updated pipeline
+- [x] 19. Post-fix rerun and sanity checks (not paper Section 6 yet)
+  - [x] 19.1 Rerun the three canonical paper seeds with the updated pipeline
     - Run the three `polarity_dial_paper_seed*.json` configs.
     - Verify artifacts are complete and `comparison_summary.json` includes:
       - axis coverage diagnostics (`coverage_summary`), and

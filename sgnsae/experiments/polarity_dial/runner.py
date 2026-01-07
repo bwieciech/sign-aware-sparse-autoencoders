@@ -192,6 +192,7 @@ def _run_single_model(
         "model_dir": model_dir,
         "calibration": calibration,
         "metadata": {
+            "model_seed": model_seed,
             "d_hidden": int(model_config.d_hidden),
             "d_hidden_effective": d_hidden_effective,
             "parameter_count": parameter_count,

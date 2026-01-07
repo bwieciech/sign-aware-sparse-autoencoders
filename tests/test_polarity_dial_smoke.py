@@ -112,6 +112,17 @@ class TestPolarityDialSmoke(unittest.TestCase):
                 "parameter_count",
                 comparison_summary["model_metadata"]["relu_sae_smoke"],
             )
+            self.assertIn(
+                "model_seed",
+                comparison_summary["model_metadata"]["relu_sae_smoke"],
+            )
+            with open(os.path.join(model_dir, "training_metrics.json"), "r") as f:
+                training_metrics = json.load(f)
+            self.assertIn("model_seed", training_metrics)
+            self.assertEqual(
+                training_metrics["model_seed"],
+                comparison_summary["model_metadata"]["relu_sae_smoke"]["model_seed"],
+            )
             self.assertTrue(
                 os.path.isfile(os.path.join(run_dir, "gamma_diff_bar_comparison.png"))
             )
