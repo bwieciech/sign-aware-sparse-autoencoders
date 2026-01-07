@@ -3,7 +3,7 @@ import os
 import sys
 from collections import defaultdict
 from dataclasses import asdict
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import torch
 from torch import Tensor
@@ -101,11 +101,13 @@ def run_training_for_variant(
     data: Dict[str, Tensor],
     model_config: PolarityDialModelVariantConfig,
     device: str,
+    dataloader_generator: Optional[torch.Generator] = None,
 ) -> Dict[str, Any]:
     dataloader = DataLoader(
         TensorDataset(data["x_train"]),
         batch_size=model_config.batch_size,
         shuffle=True,
+        generator=dataloader_generator,
     )
     steps_per_epoch = len(dataloader)
     model = _instantiate_model(

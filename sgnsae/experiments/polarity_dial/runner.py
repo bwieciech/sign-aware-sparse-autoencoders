@@ -2,6 +2,7 @@ import json
 import os
 from dataclasses import asdict, replace
 from datetime import datetime
+from hashlib import sha256
 from typing import Any, Dict, Optional
 
 import torch
@@ -43,6 +44,13 @@ try:
     import wandb
 except ImportError:  # pragma: no cover - optional dependency
     wandb = None
+
+
+def _stable_model_seed(base_seed: int, model_name: str) -> int:
+    payload = f"{base_seed}:{model_name}".encode("utf-8")
+    digest = sha256(payload).digest()
+    derived = int.from_bytes(digest[:4], byteorder="little", signed=False)
+    return int(derived % (2**31))
 
 
 def _resolve_device(device: str) -> str:
@@ -130,9 +138,17 @@ def _run_single_model(
 ) -> Dict[str, Any]:
     model_dir = os.path.join(run_dir, "models", model_config.name)
     wandb_run = _maybe_init_wandb(experiment_config, model_config.name, run_id)
+    model_seed = _stable_model_seed(experiment_config.data.seed, model_config.name)
+    set_random_seed(model_seed)
+    dataloader_generator = torch.Generator().manual_seed(model_seed)
     training_output = run_training_for_variant(
-        experiment_config, data, model_config, device
+        experiment_config,
+        data,
+        model_config,
+        device,
+        dataloader_generator=dataloader_generator,
     )
+    training_output["training_metrics"]["model_seed"] = model_seed
     persist_model_artifacts(
         training_output["model"],
         training_output["training_metrics"],

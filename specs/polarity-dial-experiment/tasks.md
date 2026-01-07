@@ -221,8 +221,8 @@
     - _Requirements: 4.5, 5.1, 6.3, 6.4_
 
 
-- [ ] 14. Fix per-model reproducibility in the main (non-sweep) runner
-  - [ ] 14.1 Deterministic per-model seeding (order-independent)
+- [x] 14. Fix per-model reproducibility in the main (non-sweep) runner
+  - [x] 14.1 Deterministic per-model seeding (order-independent)
     - In `sgnsae.experiments.polarity_dial.runner`, derive a `model_seed` for each model as a stable function of `(data.seed, model_config.name)` (e.g., `sha256(f"{seed}:{name}").hexdigest()` truncated to 31 bits).
     - Call the existing `set_random_seed(model_seed)` immediately before:
       - Instantiating the model,
@@ -230,11 +230,11 @@
       - Entering the training loop.
     - Persist `model_seed` into `models/<model_name>/training_metrics.json`.
     - _Requirements: 4.6, 5.2_
-  - [ ] 14.2 Deterministic DataLoader shuffling per model
+  - [x] 14.2 Deterministic DataLoader shuffling per model
     - Pass an explicit `generator=torch.Generator().manual_seed(model_seed)` to the DataLoader used for training.
     - Ensure the generator is created on CPU (PyTorch DataLoader expects a CPU generator).
     - _Requirements: 4.6_
-  - [ ] 14.3 Add a regression test for order independence
+  - [x] 14.3 Add a regression test for order independence
     - Construct a tiny config with 2-3 models, run the experiment twice with the model list permuted.
     - Assert that per-model `calibration.json["summary"]` values match within tight tolerances.
     - _Requirements: 4.6_
