@@ -64,7 +64,7 @@
     - `plots/training_loss_<model_name>.png`.
   - _Requirements: 1.5, 4.1, 4.4, 4.5, 8.2_
 
-- [ ] 6. Implement Protocol C runner and artifact layout
+- [x] 6. Implement Protocol C runner and artifact layout
   - Create `sgnsae/experiments/toy_model_geometry_validation/runner.py`.
   - Implement `run_toy_model_geometry_validation(experiment_config) -> str`:
     - call data generator once per sweep point,

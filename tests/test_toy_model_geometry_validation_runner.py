@@ -107,7 +107,11 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
 
             # when & then
             with self.assertRaises(ValueError):
-                _ = runner_module._run_sweep_data_generation(config, tmpdir)
+                _ = runner_module._run_sweep_experiment(config, tmpdir)
+
+    def test_extract_final_metric_returns_none_when_last_value_is_none(self) -> None:
+        # given / when / then
+        self.assertIsNone(runner_module._extract_final_metric([None]))
 
     def test_run_experiment_creates_run_dir_and_writes_config_and_environment(
         self,
@@ -133,8 +137,25 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
 
             config_artifact_path = os.path.join(run_dir, "config.json")
             environment_path = os.path.join(run_dir, "environment.json")
+            comparison_summary_path = os.path.join(run_dir, "comparison_summary.json")
             self.assertTrue(os.path.isfile(config_artifact_path))
             self.assertTrue(os.path.isfile(environment_path))
+            self.assertTrue(os.path.isfile(comparison_summary_path))
+
+            model_dir = os.path.join(run_dir, "models", "relu_sae")
+            self.assertTrue(os.path.isfile(os.path.join(model_dir, "model.pt")))
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "model_config.json"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "training_metrics.json"))
+            )
+            self.assertTrue(os.path.isfile(os.path.join(model_dir, "evaluation.json")))
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(model_dir, "plots", "training_loss_relu_sae.png")
+                )
+            )
 
             with open(config_artifact_path, "r") as f:
                 persisted_config = json.load(f)
