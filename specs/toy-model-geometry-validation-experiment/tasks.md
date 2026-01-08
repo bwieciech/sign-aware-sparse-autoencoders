@@ -49,7 +49,7 @@
   - Persist per-grid-point data config resolution into each leaf run’s `data/generator_config.json`.
   - _Requirements: 3.1, 3.2, 3.4_
 
-- [ ] 5. Implement training orchestration for Protocol C model variants
+- [x] 5. Implement training orchestration for Protocol C model variants
   - Create `sgnsae/experiments/toy_model_geometry_validation/training.py`.
   - Implement `_instantiate_model(model_config, d_in=2, device)` supporting:
     - `SAE`,
