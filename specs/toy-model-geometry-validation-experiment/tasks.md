@@ -127,7 +127,7 @@
     - sign-aware shows one vector per pair axis and tri-modal signed activation histogram.
   - _Requirements: 1.1, 3.4, 5.3, 5.4_
 
-- [ ] 11. Add unit tests for data generation and correlation feasibility
+- [x] 11. Add unit tests for data generation and correlation feasibility
   - Add `tests/test_toy_model_geometry_validation_data.py` using `unittest`:
     - determinism by seed,
     - antipodal and unit-norm checks,
@@ -135,23 +135,24 @@
     - infeasible correlation raises `ValueError` with feasible interval in message.
   - _Requirements: 2.1, 2.2, 3.1, 3.2, 9.1, 9.2_
 
-- [ ] 12. Add unit tests for Pair Consolidation Rate correctness
+- [x] 12. Add unit tests for Pair Consolidation Rate correctness
   - Add `tests/test_toy_model_geometry_validation_consolidation.py`:
     - perfect sign-aware “mock model” case where consolidation rate is 1.0,
     - baseline non-negative case where consolidation cannot hold due to sign condition.
   - _Requirements: 7.2, 9.2_
 
-- [ ] 13. Add end-to-end smoke test and artifact completeness test
+- [x] 13. Add end-to-end smoke test and artifact completeness test
   - Add `tests/test_toy_model_geometry_validation_smoke.py`:
     - run the CLI on the smoke config,
     - assert required artifacts exist (run root, data, per-model outputs).
   - _Requirements: 8.1, 8.2, 9.3_
 
-- [ ] 14. Measure coverage for Protocol C modules
-  - Run Coverage.py for the newly added Protocol C modules and document coverage results.
-  - If any module is not at 100% coverage, add tests or record a justification.
+- [x] 14. Measure coverage for Protocol C modules
+  - Coverage report command:
+    - `.venv/bin/coverage report --include='sgnsae/experiments/toy_model_geometry_validation/*.py'`
+  - Result: 100% coverage for Protocol C modules.
   - _Requirements: 9.4_
 
-- [ ] 15. Update documentation
+- [x] 15. Update documentation
   - Update `README.md` with Protocol C run instructions and a checklist of expected artifacts/plots.
   - _Requirements: 8.1_

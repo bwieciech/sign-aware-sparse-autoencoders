@@ -320,3 +320,50 @@ For each leaf run (`<run_dir>/width_<H>/seed_<seed>/`):
 - `models/<model_name>/thresholds/score_thresholds.json`
 - `models/<model_name>/evaluation.json`
 - `models/<model_name>/decoder_alignment.json`
+
+---
+
+## Toy Model Geometry Validation Experiment (Protocol C)
+
+This experiment trains baseline SAEs and the Sign-Aware Gated SAE on a synthetic 2D dataset with `k` antipodal feature pairs. It produces geometry-first diagnostics (unit-circle decoder plots), signed activation histograms, and a Pair Consolidation Rate sweep over within-pair correlation.
+
+### 0) Quickstart
+
+Run the smoke config:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_smoke.json
+```
+
+Run the correlation sweep config:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_sweep.json
+```
+
+Each run prints the final artifact directory:
+```
+Run complete. Artifacts written to: <run_dir>
+```
+
+### 1) Verify outputs (required artifacts checklist)
+
+Run root (`<run_dir>/`):
+- `config.json`
+- `environment.json`
+- `comparison_summary.json`
+- Sweep only: `pair_consolidation_sweep.json` and `plots/pair_consolidation_sweep.png`
+
+Data export (`<run_dir>/data/`):
+- `generator_config.json`
+- `feature_directions.pt`
+- `coeffs_train.pt`, `coeffs_val.pt`, `coeffs_test.pt`
+- `pair_active_mask_train.pt`, `pair_active_mask_val.pt`, `pair_active_mask_test.pt`
+- `sampled_data.pt`
+
+Per model (`<run_dir>/models/<model_name>/`):
+- `model.pt`
+- `model_config.json`
+- `training_metrics.json`
+- `evaluation.json`
+- `plots/training_loss_<model_name>.png`
+- `plots/unit_circle_<model_name>.png`
+- Sign-aware only: `plots/bi_jump_hist_<model_name>_latent<i>.png`
