@@ -1,6 +1,6 @@
 # Implementation Plan
 
-- [ ] 1. Create Protocol C package skeleton and config models
+- [x] 1. Create Protocol C package skeleton and config models
   - Create `sgnsae/experiments/toy_model_geometry_validation/` with `__init__.py`.
   - Implement `sgnsae.experiments.toy_model_geometry_validation.config` dataclasses:
     - `Toy2DDataConfig`, `Toy2DModelVariantConfig`, `Toy2DEvaluationConfig`, `Toy2DExperimentConfig`.
