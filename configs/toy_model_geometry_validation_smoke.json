@@ -1,0 +1,81 @@
+{
+  "output_dir": "tmp_toy_model_geometry_validation_runs",
+  "device": "cpu",
+  "run_id": "toy_model_geometry_validation_smoke",
+  "verbose": false,
+  "log_every_n_steps": 1000,
+  "log_every_n_epochs": 1,
+  "sample_preview_count": 1024,
+  "data": {
+    "seed": 0,
+    "num_train": 2000,
+    "num_val": 512,
+    "num_test": 512,
+    "num_pairs": 8,
+    "direction_mode": "uniform",
+    "pair_axis_active_prob": 0.2,
+    "pair_feature_prob": 0.5,
+    "pair_correlation": -1.0,
+    "magnitude_dist": "lognormal",
+    "lognormal_mu": 0.0,
+    "lognormal_sigma": 0.25,
+    "noise_std": 0.01
+  },
+  "evaluation": {
+    "min_axis_abs_cos": 0.9,
+    "min_activation_corr": 0.8,
+    "min_regime_samples": 100,
+    "hist_num_bins": 80
+  },
+  "models": [
+    {
+      "name": "gated_baseline_2k",
+      "sae_class": "GatedSAE",
+      "sign_aware": false,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 16,
+      "sparsity_coeff": 0.01,
+      "learning_rate": 0.01,
+      "num_epochs": 3,
+      "batch_size": 256,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
+      "name": "gated_sign_aware_2k",
+      "sae_class": "GatedSAE",
+      "sign_aware": true,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 16,
+      "sparsity_coeff": 0.01,
+      "learning_rate": 0.01,
+      "num_epochs": 3,
+      "batch_size": 256,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    },
+    {
+      "name": "gated_sign_aware_k",
+      "sae_class": "GatedSAE",
+      "sign_aware": true,
+      "single_activation_offset": false,
+      "reset_activation_offsets_on_resample": false,
+      "d_hidden": 8,
+      "sparsity_coeff": 0.01,
+      "learning_rate": 0.01,
+      "num_epochs": 3,
+      "batch_size": 256,
+      "adam_betas": [
+        0.9,
+        0.999
+      ]
+    }
+  ]
+}
+

@@ -110,7 +110,7 @@
   - Include per-sweep-point evaluable-pair fraction.
   - _Requirements: 7.4, 7.5_
 
-- [ ] 10. Add sample configs for Protocol C reproduction
+- [x] 10. Add sample configs for Protocol C reproduction
   - Add at least one minimal config under `configs/`, e.g.:
     - `configs/toy_model_geometry_validation_smoke.json` (tiny, fast),
     - `configs/toy_model_geometry_validation_sweep.json` (small sweep grid).

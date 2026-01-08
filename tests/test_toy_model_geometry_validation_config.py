@@ -112,6 +112,23 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
             self.assertEqual(serialized["output_dir"], "/tmp/output")
             self.assertEqual(serialized["models"][0]["name"], "relu_sae")
 
+    def test_sample_configs_load_without_errors(self) -> None:
+        # given
+        repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+        config_paths = [
+            os.path.join(
+                repo_root, "configs", "toy_model_geometry_validation_smoke.json"
+            ),
+            os.path.join(
+                repo_root, "configs", "toy_model_geometry_validation_sweep.json"
+            ),
+        ]
+
+        # when / then
+        for path in config_paths:
+            config = config_module.load_experiment_config(path)
+            self.assertTrue(config.run_id)
+
     def test_load_config_requires_yaml_dependency(self) -> None:
         # given
         yaml_text = "\n".join(
