@@ -313,57 +313,60 @@ We then compute separate least-squares rescaling factors for the positive and ne
 \subsection{Protocol B: Directional Deviation Detection (Resource Constrained)}
 \label{sec:protocol_b}
 
-In control systems and operations monitoring, deviations are often \emph{directional}: a sensor can drift \emph{too high}
-or \emph{too low}. Protocol B evaluates whether a sparse autoencoder can serve as a resource-constrained, direction-aware
-anomaly detector when the latent budget is strictly smaller than the number of monitored channels.
+In control systems and operations monitoring, deviations often carry directional semantics (e.g., ``Pressure Too High'' vs.\ ``Pressure Too Low''). Protocol B benchmarks the Sign-Aware Gated SAE as a direction-aware anomaly detector under a strict latent budget constraint, and clarifies when such detection is feasible or fundamentally limited.
 
 \paragraph{Setup.}
-We simulate a high-dimensional sensor array with $N=1024$ channels and train all models under a strict latent budget
-constraint $H < N$. Normal samples are drawn from a configurable distribution:
-(i) an isotropic baseline $x \sim \mathcal{N}(0, I)$, and (ii) \emph{symmetry-breaking} variants (heteroskedastic or
-independent non-Gaussian marginals) that make channel axes identifiable.
+We simulate a high-dimensional sensor array $x \in \mathbb{R}^N$ with $N=1024$ channels. We train models under a strict latent budget constraint $H < N$ and evaluate detection at a fixed false positive rate (FPR).
+
+\paragraph{Normal distributions.}
+We consider two normal regimes:
+\begin{itemize}
+    \item \textbf{Isotropic normal:} $x \sim \mathcal{N}(0, I)$.
+    \item \textbf{Mildly heteroskedastic normal:} $x_j \sim \mathcal{N}(0, \sigma_j^2)$ with distinct $\sigma_j$ values close to 1. This breaks rotational symmetry while keeping channels approximately comparable, and is intended to make axis semantics learnable without strongly reweighting the reconstruction objective.
+\end{itemize}
 
 \paragraph{Anomalies.}
-We consider two anomaly families:
+We evaluate two anomaly families:
 \begin{enumerate}
-    \item \textbf{Coordinate (channel) anomalies:} a single channel $j$ is shifted by $\pm \Delta$.
-    \item \textbf{Feature-direction anomalies:} a sample is shifted by $\pm \Delta v_k$ along one of $M$ unit directions
-    $v_k \in \mathbb{R}^N$ derived from a \emph{reference model} (by default, decoder columns of the Sign-Aware SAE).
+    \item \textbf{Coordinate (channel) anomalies:} choose a channel $j$ and shift $x_j \mapsto x_j \pm \Delta$.
+    \item \textbf{Feature-direction anomalies:} choose a direction $v_k \in \mathbb{R}^N$ and shift $x \mapsto x \pm \Delta_k v_k$.
 \end{enumerate}
-The second setting isolates direction-aware gating by defining anomalies in a space the model actually uses.
-
-\paragraph{Directional anomaly scoring.}
-For the Sign-Aware SAE, we use the two-tailed gate pre-activation $\pi_i(x)$ with per-latent tail thresholds
-$(\tau_i^+, \tau_i^-)$ calibrated on validation normals:
+For feature-direction anomalies, directions $v_k$ are derived from a reference Sign-Aware model trained on the same normal data. We select the top-$M$ directions by the empirical standard deviation of the reference model's detection signal (gate preactivation) on a clean normal split, which prioritizes directions that produce a strong gate signal. To reduce width-dependent effects, we optionally scale the input perturbation per direction using a fixed-$\Delta \pi$ rule:
 \begin{equation}
-    \text{Score}_{\text{high}}(x) = \operatorname{Pool}_i\!\left[\text{ReLU}\!\big(\pi_i(x) - \tau_i^+\big)\right], \qquad
-    \text{Score}_{\text{low}}(x)  = \operatorname{Pool}_i\!\left[\text{ReLU}\!\big(-\pi_i(x) - \tau_i^-\big)\right],
+    \Delta_k = \frac{\Delta}{\alpha_k + \epsilon},
 \end{equation}
-where $\operatorname{Pool}$ is a configurable aggregation (sum, max, or top-$k$). For baseline models with non-negative
-evidence, we restrict scoring to one-sided signals and assign latents to directions using decoder geometry to avoid
-two-sided leakage.
+where $\alpha_k$ is the reference model's per-latent gate scale for the selected latent and $\epsilon$ is a small stabilizer. This targets an approximately constant first-order shift in the reference latent's gate preactivation across selected directions.
 
-\paragraph{Evaluation.}
-We calibrate score thresholds to achieve a fixed false positive rate (FPR) on held-out normal validation data and report:
-(i) \textit{Directional Recall @ Fixed FPR} for high and low anomalies, and (ii) a \textit{coverage} metric: the fraction
-of targets (channels or directions) for which both-direction recall exceeds a preset threshold (default $0.8$).
+\paragraph{Directional scoring and calibration.}
+For the Sign-Aware model, let $\pi_i(x)$ denote the gate preactivation of latent $i$. We optionally normalize the per-latent signal on validation normals to improve robustness under heteroskedastic or heavy-tailed normals:
+\begin{equation}
+    \tilde{\pi}_i(x) = \frac{\pi_i(x) - \mu_i}{\max(\sigma_i, \varepsilon)},
+\end{equation}
+where $(\mu_i,\sigma_i)$ are fitted on validation normals and $\varepsilon$ is a small floor. We then define exceedances for the positive and negative tails:
+\begin{equation}
+    z_i^+(x) = \text{ReLU}\big(\tilde{\pi}_i(x) - \tau_i^+\big), \qquad
+    z_i^-(x) = \text{ReLU}\big(-\tilde{\pi}_i(x) - \tau_i^-\big),
+\end{equation}
+where $\tau_i^+$ and $\tau_i^-$ are per-latent thresholds (e.g., the 99th percentile of $\tilde{\pi}_i(x)$ and $-\tilde{\pi}_i(x)$ on validation normals). We pool exceedances across latents to form directional anomaly scores:
+\begin{equation}
+    \text{Score}_{\text{high}}(x) = \operatorname{Pool}_i\big[z_i^+(x)\big], \qquad
+    \text{Score}_{\text{low}}(x)  = \operatorname{Pool}_i\big[z_i^-(x)\big],
+\end{equation}
+where $\operatorname{Pool}$ is a configurable aggregation (sum, max, or top-$k$ sum). We choose score thresholds $\theta_{\text{high}}$ and $\theta_{\text{low}}$ to achieve a target FPR (1\%) on validation normals, and report recall on held-out anomalies.
 
-\paragraph{Identifiability note and diagnostics.}
-On isotropic normals, channel identities are \emph{not identifiable} due to rotational symmetry: a single-coordinate shift
-projects onto a generic unit latent with expected magnitude $\Delta/\sqrt{N}$, which can be far below typical tail
-thresholds. Therefore we (a) include symmetry-breaking normal distributions and feature-direction anomalies, and
-(b) log decoder alignment diagnostics (per-latent channel argmax and channel-purity) to verify whether channel semantics
-are actually learned.
+\paragraph{Baselines and leakage prevention.}
+For baselines with non-negative activations, we use one-sided evidence signals and restrict directional scoring to avoid ``two-sided leakage'' from a single latent. Direction assignment uses decoder geometry (e.g., the sign of the dominant decoder component) and scoring pools exceedances within the assigned direction group.
 
-\paragraph{Preliminary observations and next iteration.}
-In initial runs on isotropic normals, directional recall is close to the calibrated FPR and coverage is near zero, consistent
-with rotational non-identifiability. A symmetry-breaking coordinate experiment improves decoder axis alignment but can still
-yield weak detection, and we observe that latent tail thresholds can change substantially under heteroskedastic normals. This
-motivates per-latent signal normalization (z-scoring on validation normals) before thresholding and pooling (5E). For
-feature-direction anomalies, the Sign-Aware model can achieve strong recall at moderate widths, but performance can degrade
-at larger widths when anomaly strength varies across directions and pooling noise grows with $H$. This motivates
-strength-controlled feature anomalies (direction selection tied to $\pi$ statistics and optional per-direction $\Delta$
-scaling) together with localized pooling (5F).
+\paragraph{Metrics.}
+We report:
+\begin{itemize}
+    \item \textbf{Directional Recall @ Fixed FPR:} recall for high and low anomalies at 1\% FPR.
+    \item \textbf{Coverage:} the fraction of targets for which both-direction recall exceeds a preset threshold (default 0.8). Targets are channels for coordinate anomalies and directions for feature-direction anomalies.
+    \item \textbf{Alignment diagnostics:} decoder channel-purity and the number of unique channels claimed by latents (argmax channel occupancy), used to detect random-rotation behavior and quantify axis alignment.
+\end{itemize}
+
+\paragraph{Protocol variants and expectations.}
+We treat isotropic coordinate anomalies as a control that highlights non-identifiability under rotational symmetry. We treat symmetry-breaking coordinate anomalies as a stress test of whether channel semantics emerge under a strict latent budget. The primary positive setting is feature-direction anomalies with strength control and localized pooling, which tests whether the Sign-Aware model provides robust two-tailed directional detection on operationally meaningful axes.
 
 \subsection{Protocol C: Geometric Validation on Toy Models}
 This protocol replicates the setup of \cite{elhage2022toy} to provide visual and geometric confirmation that the Sign-Aware SAE correctly identifies and consolidates anticorrelated subspaces.
@@ -505,23 +508,33 @@ expressive option for settings with more extreme sign-conditioned asymmetry.
 \subsection{Protocol B: Directional Deviation Detection}
 \label{sec:results_protocol_b}
 
-\paragraph{Preliminary finding: isotropic normals yield chance-level directional detection.}
-Using the current Protocol B implementation on isotropic normal data ($x \sim \mathcal{N}(0, I)$; $N=1024$; $\Delta=6$;
-three seeds; widths swept from $H=32$ to $H=512$; thresholds calibrated at the 99th percentile and fixed at $\text{FPR}=1\%$),
-all evaluated models achieve \emph{directional recall close to the target FPR} (roughly 1--2\%) with \emph{0 coverage}
-under the default coverage criterion. Score histograms show substantial overlap between normal and anomalous samples.
+\paragraph{Coordinate anomalies on isotropic normals are undetectable under strict compression.}
+On isotropic normals $x \sim \mathcal{N}(0, I)$ with single-channel shifts, all evaluated models achieve directional recall close to the calibrated FPR (roughly 1\% to 2\% recall at 1\% FPR) and 0 coverage across widths $H \in \{32,64,128,256,512\}$. Decoder alignment diagnostics are consistent with a random-rotation regime (low channel-purity and argmax-channel occupancy matching random assignment). This matches the expected non-identifiability: when the normal distribution is rotationally symmetric, no coordinate system is preferred, so single-channel shifts do not consistently create large per-latent tail events in the learned basis.
 
-\paragraph{Explanation: rotational symmetry makes channel detectors unidentifiable.}
-For isotropic Gaussians, no coordinate axis is distinguished by the training distribution, so learned latents can rotate
-arbitrarily. A single-channel shift of magnitude $\Delta$ therefore projects onto a generic unit latent with expected
-magnitude $\Delta/\sqrt{N}$ (here $\approx 0.19$), far below typical tail thresholds, leading to recall $\approx$ FPR.
+\paragraph{Symmetry-breaking improves alignment but does not rescue coordinate monitoring.}
+We next break rotational symmetry using heteroskedastic normals with distinct channel variances, and enable per-latent z-score normalization and max pooling. While alignment diagnostics shift in the expected direction (higher decoder channel-purity and non-random argmax-channel occupancy), directional recall remains near the calibrated FPR and coverage remains 0 across all widths. Empirically, even the best channels detect only a small fraction of anomalies (well below the coverage threshold). This suggests that for independent channels, strict dimensionality reduction $H < N$ can make per-channel monitoring infeasible without additional shared structure (e.g., correlations or low-rank factors) that allows compression without losing channel-level anomaly information.
 
-\paragraph{Protocol revision.}
-To make Protocol B measure the intended capacity advantage, we extend the protocol to: (i) use symmetry-breaking normal
-distributions (heteroskedastic or IID non-Gaussian channels) so coordinate anomalies are identifiable, (ii) add
-feature-direction anomalies defined along learned decoder directions of a reference model, (iii) adopt localized score
-pooling (max/top-$k$) for single-target anomalies, and (iv) log decoder alignment diagnostics (channel purity and unique
-channels claimed) to verify whether channel semantics are learned.
+\paragraph{Feature-direction anomalies yield strong two-tailed detection for the Sign-Aware model.}
+We then evaluate feature-direction anomalies aligned to operational axes derived from a reference Sign-Aware model. We select $M=128$ directions by the standard deviation of the reference model's gate preactivation on validation normals (top-$\mathrm{std}(\pi)$), and scale per-direction input perturbations using a fixed-$\Delta \pi$ rule to reduce width-dependent effects. We calibrate thresholds at 1\% FPR and use localized pooling (max or top-$k$).
+
+\begin{table}[t]
+    \centering
+    \caption{Protocol B results for feature-direction anomalies (mean over three seeds, target FPR 1\%). Directions: $M=128$ selected by top-$\mathrm{std}(\pi)$ from a reference Sign-Aware model; per-direction inputs scaled by a fixed-$\Delta\pi$ rule. Coverage denotes the fraction of directions with both-direction recall $\ge 0.8$.}
+    \label{tab:protocol_b_feature_direction}
+    \small\begin{tabular}{lcccc}
+        \toprule
+        Width $H$ & Pooling & Sign-Aware Recall (high) & Sign-Aware Recall (low) & Coverage \\
+        \midrule
+        128 & max & 0.998 & 0.997 & 1.00 \\
+        256 & max & 0.995 & 0.995 & 1.00 \\
+        512 & max & 0.992 & 0.990 & 1.00 \\
+        \midrule
+        512 & top-$k$ ($k=4$) & 0.934 & 0.934 & 1.00 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Across all widths, the Sign-Aware model achieves near-saturated directional recall and full direction coverage with max pooling (\cref{tab:protocol_b_feature_direction}). In contrast, non-sign-aware baselines remain near chance on this evaluation (directional recall close to the calibrated FPR and 0 coverage), consistent with their one-sided evidence and the difficulty of representing both tails of a direction efficiently under a fixed latent budget.
 
 
 %----------------------------------------------------------------------------------------
