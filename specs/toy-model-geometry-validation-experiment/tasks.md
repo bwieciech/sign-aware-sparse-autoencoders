@@ -93,7 +93,7 @@
     - chosen histogram latent index + its alignment (if sign-aware).
   - _Requirements: 5.1, 7.1, 7.2, 7.3_
 
-- [ ] 8. Implement plotting: unit circle and Bi-Jump histogram
+- [x] 8. Implement plotting: unit circle and Bi-Jump histogram
   - Create `sgnsae/experiments/toy_model_geometry_validation/plotting.py`.
   - Implement `plot_unit_circle(...)`:
     - plot ground truth directions and learned decoder directions on a unit circle,

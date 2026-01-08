@@ -109,6 +109,40 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _ = runner_module._run_sweep_experiment(config, tmpdir)
 
+    def test_run_experiment_generates_bijump_histogram_for_sign_aware_models(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_sign_aware")
+            raw_config["models"][0]["name"] = "sign_sae"
+            raw_config["models"][0]["sign_aware"] = True
+
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            run_dir = runner_module.run_toy_model_geometry_validation_experiment(
+                config_path
+            )
+
+            # then
+            model_dir = os.path.join(run_dir, "models", "sign_sae")
+            with open(os.path.join(model_dir, "evaluation.json"), "r") as f:
+                evaluation = json.load(f)
+            self.assertIsNotNone(evaluation["histogram_latent"])
+            latent_index = int(evaluation["histogram_latent"]["latent_index"])
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(
+                        model_dir,
+                        "plots",
+                        f"bi_jump_hist_sign_sae_latent{latent_index}.png",
+                    )
+                )
+            )
+
     def test_extract_final_metric_returns_none_when_last_value_is_none(self) -> None:
         # given / when / then
         self.assertIsNone(runner_module._extract_final_metric([None]))
@@ -154,6 +188,11 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             self.assertTrue(
                 os.path.isfile(
                     os.path.join(model_dir, "plots", "training_loss_relu_sae.png")
+                )
+            )
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(model_dir, "plots", "unit_circle_relu_sae.png")
                 )
             )
 

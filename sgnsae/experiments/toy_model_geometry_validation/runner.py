@@ -21,6 +21,10 @@ from sgnsae.experiments.toy_model_geometry_validation.evaluation import (
     evaluate_toy2d_model,
     persist_evaluation,
 )
+from sgnsae.experiments.toy_model_geometry_validation.plotting import (
+    plot_bijump_histogram,
+    plot_unit_circle,
+)
 from sgnsae.experiments.toy_model_geometry_validation.training import (
     persist_model_artifacts,
     run_training_for_variant,
@@ -177,6 +181,28 @@ def _run_single_model(
         device=experiment_config.device,
     )
     persist_evaluation(evaluation=evaluation, model_dir=model_dir)
+    plot_unit_circle(
+        model=training_output["model"],
+        model_name=model_config.name,
+        feature_directions=data["feature_directions"],
+        model_dir=model_dir,
+    )
+    if bool(model_config.sign_aware) and evaluation.get("histogram_latent") is not None:
+        histogram_info = evaluation["histogram_latent"]
+        plot_bijump_histogram(
+            model=training_output["model"],
+            model_name=model_config.name,
+            x_test=data["x_test"],
+            latent_index=int(histogram_info["latent_index"]),
+            hist_num_bins=int(experiment_config.evaluation.hist_num_bins),
+            model_dir=model_dir,
+            device=experiment_config.device,
+            axis_abs_cos=(
+                None
+                if histogram_info.get("axis_abs_cos") is None
+                else float(histogram_info["axis_abs_cos"])
+            ),
+        )
 
     training_summary.update(
         {
