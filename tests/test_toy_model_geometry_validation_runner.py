@@ -170,6 +170,17 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             for dependency in ("numpy", "scipy", "matplotlib", "einops"):
                 self.assertIn(dependency, environment_metadata["dependencies"])
 
+            with open(os.path.join(model_dir, "evaluation.json"), "r") as f:
+                evaluation = json.load(f)
+            self.assertEqual(evaluation["status"], "ok")
+            self.assertEqual(evaluation["num_pairs_total"], 2)
+            self.assertEqual(evaluation["num_pairs_evaluable"], 0)
+            self.assertEqual(evaluation["num_pairs_consolidated"], 0)
+            self.assertIsNone(
+                evaluation["pair_consolidation_rate_over_evaluable_pairs"]
+            )
+            self.assertIsNone(evaluation["histogram_latent"])
+
     def test_run_experiment_respects_output_dir_when_already_parent(self) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:

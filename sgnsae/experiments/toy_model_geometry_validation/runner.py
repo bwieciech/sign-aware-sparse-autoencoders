@@ -17,6 +17,10 @@ from sgnsae.experiments.toy_model_geometry_validation.data import (
     generate_toy2d_dataset,
     set_random_seed,
 )
+from sgnsae.experiments.toy_model_geometry_validation.evaluation import (
+    evaluate_toy2d_model,
+    persist_evaluation,
+)
 from sgnsae.experiments.toy_model_geometry_validation.training import (
     persist_model_artifacts,
     run_training_for_variant,
@@ -107,25 +111,6 @@ def _run_data_generation(
     return data
 
 
-def _persist_placeholder_evaluation(
-    model_dir: str,
-    model_name: str,
-    training_summary: Dict[str, Any],
-    error: Optional[str] = None,
-) -> None:
-    evaluation_path = os.path.join(model_dir, "evaluation.json")
-    payload = {
-        "model_name": model_name,
-        "status": "not_implemented",
-        "pair_consolidation_rate_over_evaluable_pairs": None,
-        "evaluable_pair_fraction": None,
-        "training_summary": training_summary,
-        "error": error,
-    }
-    with open(evaluation_path, "w") as f:
-        json.dump(payload, f, indent=2)
-
-
 def _extract_final_metric(values: Any) -> Optional[float]:
     if not isinstance(values, list) or not values:
         return None
@@ -182,12 +167,39 @@ def _run_single_model(
         ),
         "final_loss_aux": _extract_final_metric(training_metrics.get("loss_aux")),
     }
-    _persist_placeholder_evaluation(
-        model_dir=model_dir,
+
+    evaluation = evaluate_toy2d_model(
+        model=training_output["model"],
+        data=data,
+        evaluation_config=experiment_config.evaluation,
         model_name=model_config.name,
-        training_summary=training_summary,
+        sign_aware=bool(model_config.sign_aware),
+        device=experiment_config.device,
     )
-    return {"model_dir": model_dir, "training_summary": training_summary}
+    persist_evaluation(evaluation=evaluation, model_dir=model_dir)
+
+    training_summary.update(
+        {
+            "pair_consolidation_rate_over_evaluable_pairs": evaluation.get(
+                "pair_consolidation_rate_over_evaluable_pairs"
+            ),
+            "evaluable_pair_fraction": evaluation.get("evaluable_pair_fraction"),
+            "num_pairs_consolidated": evaluation.get("num_pairs_consolidated"),
+            "num_pairs_evaluable": evaluation.get("num_pairs_evaluable"),
+        }
+    )
+    return {
+        "model_dir": model_dir,
+        "training_summary": training_summary,
+        "evaluation_summary": {
+            "pair_consolidation_rate_over_evaluable_pairs": evaluation.get(
+                "pair_consolidation_rate_over_evaluable_pairs"
+            ),
+            "evaluable_pair_fraction": evaluation.get("evaluable_pair_fraction"),
+            "num_pairs_consolidated": evaluation.get("num_pairs_consolidated"),
+            "num_pairs_evaluable": evaluation.get("num_pairs_evaluable"),
+        },
+    }
 
 
 def _run_leaf_experiment(

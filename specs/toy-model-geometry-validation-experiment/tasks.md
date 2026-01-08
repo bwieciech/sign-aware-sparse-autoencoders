@@ -76,7 +76,7 @@
   - Ensure run-level layout matches the design doc exactly.
   - _Requirements: 1.2, 1.5, 4.4, 8.1, 8.2_
 
-- [ ] 7. Implement evaluation utilities: decoder extraction, alignment, and consolidation
+- [x] 7. Implement evaluation utilities: decoder extraction, alignment, and consolidation
   - Create `sgnsae/experiments/toy_model_geometry_validation/evaluation.py`.
   - Implement:
     - decoder direction extraction and normalization,
