@@ -45,6 +45,70 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             ],
         }
 
+    def test_run_experiment_supports_pair_correlation_grid_and_persists_leaf_runs(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_sweep")
+            raw_config["data"]["pair_correlation"] = None
+            raw_config["data"]["pair_correlation_grid"] = [-1.0, 0.0]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            run_dir = runner_module.run_toy_model_geometry_validation_experiment(
+                config_path
+            )
+
+            # then
+            expected_run_dir = os.path.join(
+                tmpdir, "toy_model_geometry_validation", "unittest_sweep"
+            )
+            self.assertEqual(run_dir, expected_run_dir)
+
+            for correlation_value in (-1.0, 0.0):
+                leaf_dir = os.path.join(
+                    run_dir,
+                    f"corr_{runner_module._format_pair_correlation(correlation_value)}",
+                )
+                self.assertTrue(os.path.isdir(leaf_dir))
+                with open(os.path.join(leaf_dir, "config.json"), "r") as f:
+                    leaf_config = json.load(f)
+                self.assertEqual(
+                    leaf_config["data"]["pair_correlation"], correlation_value
+                )
+                self.assertIsNone(leaf_config["data"]["pair_correlation_grid"])
+
+                generator_config_path = os.path.join(
+                    leaf_dir, "data", "generator_config.json"
+                )
+                self.assertTrue(os.path.isfile(generator_config_path))
+                with open(generator_config_path, "r") as f:
+                    generator_config = json.load(f)
+                self.assertEqual(
+                    generator_config["pair_correlation"], correlation_value
+                )
+                self.assertIsNone(generator_config["pair_correlation_grid"])
+
+    def test_run_sweep_data_generation_rejects_missing_grid(self) -> None:
+        # given
+        from sgnsae.experiments.toy_model_geometry_validation import (
+            config as config_module,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+            config = config_module.load_experiment_config(config_path)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = runner_module._run_sweep_data_generation(config, tmpdir)
+
     def test_run_experiment_creates_run_dir_and_writes_config_and_environment(
         self,
     ) -> None:

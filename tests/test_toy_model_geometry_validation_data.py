@@ -228,6 +228,17 @@ class TestToyModelGeometryValidationDataGeneration(unittest.TestCase):
                 persisted = json.load(f)
             self.assertIn("pair_axis_angles_rad", persisted)
             self.assertEqual(len(persisted["pair_axis_angles_rad"]), 4)
+            self.assertIn("pair_correlation_feasible_interval", persisted)
+            self.assertEqual(
+                persisted["pair_correlation_feasible_interval"],
+                {"r_min": -1.0, "r_max": 1.0},
+            )
+            self.assertIn("within_pair_joint_probability_q", persisted)
+            self.assertAlmostEqual(
+                persisted["within_pair_joint_probability_q"],
+                0.125,
+                places=6,
+            )
             self.assertIn("within_pair_joint_probabilities", persisted)
             self.assertEqual(
                 set(persisted["within_pair_joint_probabilities"].keys()),
@@ -322,6 +333,33 @@ class TestToyModelGeometryValidationDataGeneration(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 _ = data_module._sample_within_pair_presence(2, config, generator)
+
+    def test_sample_within_pair_presence_rejects_negative_joint_probabilities(
+        self,
+    ) -> None:
+        # given
+        generator = data_module._create_cpu_generator(0)
+        config = self._build_config()
+
+        # when & then
+        with patch.object(
+            data_module,
+            "_calculate_within_pair_joint_probabilities",
+            return_value=(-0.25, 0.25, 0.25, 0.75),
+        ):
+            with self.assertRaises(ValueError):
+                _ = data_module._sample_within_pair_presence(2, config, generator)
+
+    def test_calculate_within_pair_joint_probabilities_rejects_invalid_correlation(
+        self,
+    ) -> None:
+        # given / when / then
+        with self.assertRaises(ValueError):
+            _ = data_module._calculate_within_pair_joint_probabilities(0.5, 2.0)
+
+        with self.assertRaises(ValueError) as context:
+            _ = data_module._calculate_within_pair_joint_probabilities(0.1, -1.0)
+        self.assertIn("feasible interval is [", str(context.exception))
 
     def test_sample_magnitudes_rejects_unknown_distribution(self) -> None:
         # given

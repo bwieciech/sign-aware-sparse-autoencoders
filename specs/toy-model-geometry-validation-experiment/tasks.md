@@ -36,7 +36,7 @@
     - `sampled_data.pt` preview.
   - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 8.1_
 
-- [ ] 4. Implement within-pair correlation sampling and sweep plumbing
+- [x] 4. Implement within-pair correlation sampling and sweep plumbing
   - In `data.py`, implement bivariate Bernoulli sampling with target `pair_correlation`:
     - compute `q = p^2 + r p (1-p)` and validate feasibility.
     - sample `(f_plus, f_minus)` via a 4-way categorical distribution.

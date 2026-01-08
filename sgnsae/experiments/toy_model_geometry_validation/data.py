@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from sgnsae.experiments.toy_model_geometry_validation import config as config_module
 from sgnsae.experiments.toy_model_geometry_validation.config import Toy2DDataConfig
 
 
@@ -92,6 +93,19 @@ def _calculate_within_pair_joint_probabilities(
 ) -> Tuple[float, float, float, float]:
     p = float(pair_feature_prob)
     r = float(pair_correlation)
+    if not -1.0 <= r <= 1.0:
+        raise ValueError(
+            "pair_correlation must be within [-1, 1]; "
+            f"received pair_correlation={pair_correlation}."
+        )
+
+    r_min, r_max = config_module._calculate_pair_correlation_feasible_interval(p)
+    if r < r_min or r > r_max:
+        raise ValueError(
+            f"pair_correlation={pair_correlation} is infeasible for pair_feature_prob={pair_feature_prob}; "
+            f"feasible interval is [{r_min}, {r_max}]."
+        )
+
     q = p * p + r * p * (1.0 - p)
 
     p11 = q
@@ -119,6 +133,14 @@ def _sample_within_pair_presence(
         pair_feature_prob=config.pair_feature_prob,
         pair_correlation=float(config.pair_correlation),
     )
+
+    tolerance = 1e-12
+    if min(p00, p01, p10, p11) < -tolerance:
+        raise ValueError(
+            "Within-pair joint probabilities must be non-negative; received "
+            f"p00={p00}, p01={p01}, p10={p10}, p11={p11}."
+        )
+
     p00 = max(0.0, p00)
     p01 = max(0.0, p01)
     p10 = max(0.0, p10)
@@ -281,11 +303,26 @@ def export_toy2d_dataset(
         )
 
     generator_config_path = os.path.join(data_dir, "generator_config.json")
+    feasible_r_min, feasible_r_max = (
+        config_module._calculate_pair_correlation_feasible_interval(
+            float(config.pair_feature_prob)
+        )
+    )
+    q_value = None
+    if config.pair_correlation is not None:
+        q_value = float(config.pair_feature_prob) ** 2 + float(
+            config.pair_correlation
+        ) * float(config.pair_feature_prob) * (1.0 - float(config.pair_feature_prob))
     generator_payload: Dict[str, Any] = {
         **asdict(config),
         "pair_axis_angles_rad": [
             float(value) for value in pair_angles.detach().cpu().tolist()
         ],
+        "pair_correlation_feasible_interval": {
+            "r_min": float(feasible_r_min),
+            "r_max": float(feasible_r_max),
+        },
+        "within_pair_joint_probability_q": q_value,
         "within_pair_joint_probabilities": {
             "p00": float(joint_probs[0].detach().cpu().item()),
             "p01": float(joint_probs[1].detach().cpu().item()),
