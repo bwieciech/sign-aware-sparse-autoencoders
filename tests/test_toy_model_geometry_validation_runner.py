@@ -68,6 +68,22 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             )
             self.assertEqual(run_dir, expected_run_dir)
 
+            self.assertTrue(
+                os.path.isfile(os.path.join(run_dir, "pair_consolidation_sweep.json"))
+            )
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(run_dir, "plots", "pair_consolidation_sweep.png")
+                )
+            )
+            with open(os.path.join(run_dir, "pair_consolidation_sweep.json"), "r") as f:
+                sweep_payload = json.load(f)
+            self.assertEqual(
+                sweep_payload["sweep"]["pair_correlation_grid"], [-1.0, 0.0]
+            )
+            self.assertEqual(len(sweep_payload["points"]), 2)
+            self.assertIn("relu_sae", sweep_payload["points"][0]["per_model"])
+
             for correlation_value in (-1.0, 0.0):
                 leaf_dir = os.path.join(
                     run_dir,

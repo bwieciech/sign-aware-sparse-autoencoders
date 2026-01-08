@@ -23,6 +23,7 @@ from sgnsae.experiments.toy_model_geometry_validation.evaluation import (
 )
 from sgnsae.experiments.toy_model_geometry_validation.plotting import (
     plot_bijump_histogram,
+    plot_pair_consolidation_sweep,
     plot_unit_circle,
 )
 from sgnsae.experiments.toy_model_geometry_validation.training import (
@@ -302,6 +303,52 @@ def _run_sweep_experiment(
         },
         "per_correlation": per_correlation,
     }
+
+    sweep_points: List[Dict[str, Any]] = []
+    model_names = [model.name for model in experiment_config.models]
+    series_by_model: Dict[str, List[Optional[float]]] = {
+        model_name: [] for model_name in model_names
+    }
+    for correlation_value in grid:
+        key = _format_pair_correlation(correlation_value)
+        leaf_summary = per_correlation[key]
+        per_model_metrics: Dict[str, Any] = {}
+        for model_name in model_names:
+            model_summary = leaf_summary["per_model"][model_name]
+            per_model_metrics[model_name] = {
+                "pair_consolidation_rate_over_evaluable_pairs": model_summary.get(
+                    "pair_consolidation_rate_over_evaluable_pairs"
+                ),
+                "evaluable_pair_fraction": model_summary.get("evaluable_pair_fraction"),
+                "num_pairs_evaluable": model_summary.get("num_pairs_evaluable"),
+                "num_pairs_consolidated": model_summary.get("num_pairs_consolidated"),
+            }
+            series_by_model[model_name].append(
+                model_summary.get("pair_consolidation_rate_over_evaluable_pairs")
+            )
+
+        sweep_points.append(
+            {
+                "pair_correlation": float(correlation_value),
+                "per_model": per_model_metrics,
+            }
+        )
+
+    with open(os.path.join(run_dir, "pair_consolidation_sweep.json"), "w") as f:
+        json.dump(
+            {
+                "sweep": sweep_summary["sweep"],
+                "points": sweep_points,
+            },
+            f,
+            indent=2,
+        )
+    plot_pair_consolidation_sweep(
+        pair_correlation_grid=[float(value) for value in grid],
+        series_by_model=series_by_model,
+        output_path=os.path.join(run_dir, "plots", "pair_consolidation_sweep.png"),
+    )
+
     with open(os.path.join(run_dir, "comparison_summary.json"), "w") as f:
         json.dump(sweep_summary, f, indent=2)
     return leaf_dirs

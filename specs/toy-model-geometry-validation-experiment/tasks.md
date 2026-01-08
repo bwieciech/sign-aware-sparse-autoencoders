@@ -103,7 +103,7 @@
     - save `models/<model_name>/plots/bi_jump_hist_<model_name>_latent<i>.png`.
   - _Requirements: 5.2, 5.5, 6.1, 6.2, 6.3_
 
-- [ ] 9. Implement sweep aggregation and run-level sweep plots
+- [x] 9. Implement sweep aggregation and run-level sweep plots
   - In `runner.py`, aggregate metrics across `pair_correlation_grid` into:
     - `<run_dir>/pair_consolidation_sweep.json`
     - `<run_dir>/plots/pair_consolidation_sweep.png`

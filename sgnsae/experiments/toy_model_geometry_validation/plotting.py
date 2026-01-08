@@ -145,3 +145,30 @@ def plot_bijump_histogram(
     plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     return output_path
+
+
+def plot_pair_consolidation_sweep(
+    pair_correlation_grid: list[float],
+    series_by_model: dict[str, list[Optional[float]]],
+    output_path: str,
+) -> str:
+    plt = _import_matplotlib()
+
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    x_values = [float(value) for value in pair_correlation_grid]
+    plt.figure(figsize=(8, 4))
+    for model_name, series in series_by_model.items():
+        y_values = [float("nan") if value is None else float(value) for value in series]
+        plt.plot(x_values, y_values, marker="o", label=model_name)
+
+    plt.title("Pair Consolidation Sweep")
+    plt.xlabel("Within-pair correlation")
+    plt.ylabel("Consolidation rate (over evaluable pairs)")
+    plt.grid(axis="both", color="#e0e0e0", linewidth=0.8)
+    plt.legend(loc="best")
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    return output_path
