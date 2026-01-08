@@ -544,5 +544,6 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
             "Toy2DExperimentConfig",
             "load_experiment_config",
             "save_experiment_config",
+            "run_toy_model_geometry_validation_experiment",
         ):
             self.assertIn(required, exported_names)

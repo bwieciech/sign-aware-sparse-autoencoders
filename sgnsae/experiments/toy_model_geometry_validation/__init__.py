@@ -6,6 +6,9 @@ from sgnsae.experiments.toy_model_geometry_validation.config import (
     load_experiment_config,
     save_experiment_config,
 )
+from sgnsae.experiments.toy_model_geometry_validation.runner import (
+    run_toy_model_geometry_validation_experiment,
+)
 
 __all__ = [
     "Toy2DDataConfig",
@@ -14,4 +17,5 @@ __all__ = [
     "Toy2DExperimentConfig",
     "load_experiment_config",
     "save_experiment_config",
+    "run_toy_model_geometry_validation_experiment",
 ]

@@ -8,7 +8,7 @@
   - Add `__post_init__` validation, including correlation feasibility checks with informative errors.
   - _Requirements: 1.1, 3.1, 3.2, 8.4_
 
-- [ ] 2. Implement Protocol C CLI entrypoint
+- [x] 2. Implement Protocol C CLI entrypoint
   - Add `sgnsae/scripts/run_toy_model_geometry_validation_experiment.py`:
     - parse `--config-path`,
     - validate dependencies,
