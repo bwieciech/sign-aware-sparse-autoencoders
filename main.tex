@@ -214,12 +214,22 @@ Empirically, on Protocol A with the default generator settings (LogNormal positi
 \section{Proposed Experiments}
 
 We propose a comprehensive evaluation suite designed to isolate the specific contributions of the Sign-Aware Gated SAE: (1) the ability to model asymmetric distributions along a shared axis, (2) the capacity efficiency in anomaly detection tasks, and (3) the geometric consolidation of anticorrelated features.
+Unless otherwise stated, we report not only a single operating point, but also sparsity-fidelity trade-offs by sweeping the sparsity strength (e.g., $\lambda$) and plotting reconstruction MSE versus average $L_0$ (active latents per example). This avoids conclusions that depend on a single arbitrary sparsity setting.
+
 
 \subsection{Protocol A: The "Polarity Dial" (Asymmetry \& Calibration)}
-Standard Gated SAEs share a single magnitude parameter ($r$) per feature. If a feature represents an axis with asymmetric semantics (e.g., "Correctness," where \textit{correct} is frequent and bounded, while \textit{incorrect} is rare but heavy-tailed), a single scalar cannot simultaneously calibrate both sides. This experiment tests whether the decoupled $(r^+, r^-)$ and $(\delta^+, \delta^-)$ parameters in the Bi-Jump-ReLU are necessary to capture such asymmetry.
+\label{sec:protocol_a}
 
-\paragraph{Data Generation.}
-We construct a synthetic dataset $X \in \R^{N \times d}$ consisting of features aligned to random directions $u_j \in \R^d$. Each feature $f_j$ is active with probability $\rho$. If active, its sign $s_j \in \{-1, +1\}$ is determined by a Bernoulli parameter $p_+$. The magnitude follows distinct distributions conditioned on the sign:
+Protocol A is a controlled synthetic setting where each ground-truth feature is a \emph{signed} scalar coefficient along a
+random axis $u_j \in \mathbb{R}^d$. The goal is to isolate whether an SAE can represent and calibrate \emph{both} positive and
+negative evidence along the same axis without duplicating decoder atoms. This directly targets the ``anticorrelation efficiency
+gap'': non-negative SAEs must allocate two atoms $(+u_j,-u_j)$ to represent one signed axis, while a sign-aware latent can
+represent both directions with a single decoder column and a signed activation.
+
+\paragraph{Data generation.}
+We construct a synthetic dataset $X \subset \mathbb{R}^d$ consisting of $k$ axes aligned to random directions
+$u_j \in \mathbb{R}^d$. Each axis is active with probability $\rho$. If active, its sign $s_j \in \{-1, +1\}$ is sampled from
+a Bernoulli distribution with parameter $p_+$, and the magnitude follows different distributions conditioned on the sign:
 \begin{align}
     m_j \mid (s_j=+1) &\sim \text{LogNormal}(\mu=0, \sigma=0.5), \\
     m_j \mid (s_j=-1) &\sim \text{Exponential}(\lambda=1.5).
@@ -230,33 +240,74 @@ The input is
 \end{equation}
 with small isotropic noise $\epsilon$.
 
-\paragraph{Baselines.}
+\paragraph{Baselines and ablations.}
+We compare the following model families:
 \begin{itemize}
-    \item \textbf{Signed Symmetric Gated SAE (Ablation):} A sign-aware gated model that allows signed activations but enforces \emph{symmetric} magnitude calibration across polarities (e.g., $r_i^+ = r_i^-$ and optionally $\delta_i^+ = \delta_i^-$). This isolates the effect of introducing independent $(r_i^+, r_i^-)$ and $(\delta_i^+, \delta_i^-)$ in our Bi-Jump-ReLU.
-    \item \textbf{Standard (Non-negative) Gated SAE:} A conventional gated SAE with ReLU latents. Note that representing signed coefficients along a single axis requires allocating two latents to the pair $(+u_j, -u_j)$; we include this baseline primarily as a sanity check and optionally run it with $2\times$ width to remove the representational confound.
-    \item \textbf{Baseline ReLU SAE:} Standard architecture with non-negative activations; similarly requires paired atoms to represent both signs along one axis.
+    \item \textbf{Sign-Aware Gated SAE (ours):} Signed latents with two-tailed gating (a learnable dead zone) and the gated
+    objective to avoid shrinkage.
+    \item \textbf{Sign-Aware, symmetric magnitude (ablation):} The same model, but with tied per-polarity magnitude scales
+    ($r_i^+=r_i^-$). This tests whether independent per-polarity scaling is necessary in practice, and provides a more
+    parameter-efficient variant.
+    \item \textbf{Standard Gated SAE (non-negative, width $H$):} A conventional gated SAE with ReLU latents.
+    \item \textbf{Standard Gated SAE (non-negative, width $2H$):} The same gated SAE trained at $2\times$ width. This
+    controls for the representational requirement that non-negative models need paired atoms $(+u_j,-u_j)$ to represent a
+    signed axis.
+    \item \textbf{Baseline ReLU SAE (width $H$):} A standard SAE with ReLU latents.
+    \item \textbf{Baseline ReLU SAE (width $2H$):} The same ReLU SAE trained at $2\times$ width.
+    \item \textbf{Signed Soft-Threshold SAE (signed-latent baseline):} A signed-latent baseline using a soft-threshold
+    nonlinearity (a standard choice in signed sparse coding). This baseline can represent negative coefficients without paired
+    atoms, but typically exhibits $\ell_1$ shrinkage and can become dense, separating ``signed latents'' from the gated
+    no-shrinkage objective.
 \end{itemize}
 
-\paragraph{Latent--Feature Alignment.}
-To compare learned latents to ground-truth features, we align them by maximizing cosine similarity between decoder columns and feature directions. Concretely, we compute the matrix of cosines $\cos(D_{:,i}, u_j)$, and obtain a one-to-one matching between latents $i$ and features $j$ via the Hungarian algorithm, ensuring each latent is assigned to at most one ground-truth axis.
+\paragraph{Axis-aware alignment and pairing.}
+To compare learned representations to ground-truth \emph{axes} $u_j$, we evaluate at the axis level rather than treating
+$u_j$ and $-u_j$ as distinct targets. We normalize decoder columns to unit norm for alignment, then compute signed cosine
+similarities
+\[
+    s_{ij} = \cos(D_{:,i}, u_j),
+\]
+and define an axis similarity score $|s_{ij}|$. For sign-aware (signed-latent) models, we perform a one-to-one matching
+between latents $i$ and axes $j$ via the Hungarian algorithm on the absolute similarities $|s_{ij}|$, and we record the sign
+of $s_{ij}$ for diagnostics.
+For non-negative baselines, we additionally allow \emph{two} latents to represent one axis: for each axis $j$, we select the
+best positively aligned latent $i^+(j)=\arg\max_i s_{ij}$ and the best negatively aligned latent $i^-(j)=\arg\min_i s_{ij}$
+(subject to an alignment threshold). This credits baselines that learn paired atoms $(+u_j,-u_j)$, which is the expected
+mechanism by which non-negative models represent signed structure.
 
 \paragraph{Metrics.}
-We focus on \textit{Split-Scale Calibration}. For each matched pair $(i,j)$, let
+We focus on \textit{Split-Scale Calibration} at the axis level. For each ground-truth axis $j$, let
 \begin{equation}
     c_j(x) = s_j m_j
 \end{equation}
-denote the ground-truth scalar coefficient along $u_j$ in the generative model, and let $\hat{c}_i(x)$ denote the model's scalar estimate for that axis, obtained by projecting the reconstruction from latent $i$ onto $u_j$:
+denote the ground-truth scalar coefficient along $u_j$ in the generative model. We define the model's scalar coefficient
+estimate $\hat{c}_j(x)$ by projecting the relevant reconstructed contribution(s) onto $u_j$.
+For sign-aware (signed-latent) models with a single matched latent $i(j)$, we use
 \begin{equation}
-    \hat{c}_i(x) = u_j^\top \big( a_i(x) D_{:,i} \big).
+    \hat{c}_j(x) = u_j^\top \big( a_{i(j)}(x)\, D_{:,i(j)} \big).
 \end{equation}
+For non-negative baselines using paired atoms $(i^+(j), i^-(j))$, we use an axis-aggregated estimate
+\begin{equation}
+    \hat{c}_j(x) = u_j^\top \Big( a_{i^+(j)}(x)\, D_{:,i^+(j)} + a_{i^-(j)}(x)\, D_{:,i^-(j)} \Big),
+\end{equation}
+which reduces to $\hat{c}_j(x)\approx a_{i^+(j)}(x)-a_{i^-(j)}(x)$ when $D_{:,i^+(j)}\approx u_j$ and
+$D_{:,i^-(j)}\approx -u_j$.
 We then compute separate least-squares rescaling factors for the positive and negative halves of the data:
 \begin{align}
-    \gamma_+ &= \arg\min_{\alpha} \E\big[(\alpha \hat{c}_i(x) - c_j(x))^2 \,\big|\, c_j(x) > 0\big], \\
-    \gamma_- &= \arg\min_{\alpha} \E\big[(\alpha \hat{c}_i(x) - c_j(x))^2 \,\big|\, c_j(x) < 0\big].
+    \gamma_+ &= \arg\min_{\alpha} \E\big[(\alpha \hat{c}_j(x) - c_j(x))^2 \,\big|\, c_j(x) > 0\big], \\
+    \gamma_- &= \arg\min_{\alpha} \E\big[(\alpha \hat{c}_j(x) - c_j(x))^2 \,\big|\, c_j(x) < 0\big].
 \end{align}
 \begin{itemize}
-    \item \textbf{Ideal Outcome:} $\gamma_+ \approx 1$ and $\gamma_- \approx 1$.
-    \item \textbf{Hypothesis:} Allowing signed activations should enable simultaneous calibration on both sides of each ground-truth axis ($\gamma_+ \approx 1$ and $\gamma_- \approx 1$). The \emph{Signed Symmetric Gated SAE} ablation tests whether tying per-polarity magnitude scaling (e.g., $r^+=r^-$) degrades calibration when sign-conditioned magnitudes and/or frequencies are sufficiently asymmetric; any observed gap isolates the contribution of independent per-polarity scaling from sign-awareness itself.
+    \item \textbf{Ideal outcome:} $\gamma_+ \approx 1$ and $\gamma_- \approx 1$.
+    \item \textbf{Primary hypothesis:} The Sign-Aware Gated SAE achieves $\gamma_+ \approx 1$ and $\gamma_- \approx 1$ using
+    one latent per axis at width $H$. Non-negative models can approach this only if they allocate paired atoms; the $2H$
+    baselines test whether remaining gaps at width $H$ are primarily representational (insufficient atoms) rather than
+    optimization-related.
+    \item \textbf{Secondary question:} Whether independent per-polarity magnitude scaling ($r_i^+ \neq r_i^-$) yields
+    additional calibration gains beyond sign-awareness, tested via the symmetric-magnitude ablation.
+    \item \textbf{Robustness diagnostics:} Because $\gamma_\pm$ can become ill-conditioned when $\hat{c}_j(x)$ collapses
+    toward zero on a regime, we also report per-regime coefficient-space MSE, Pearson correlation between $\hat{c}_j(x)$ and
+    $c_j(x)$, and explained variance ($R^2$), each computed separately on $\{c_j(x)>0\}$ and $\{c_j(x)<0\}$.
 \end{itemize}
 
 \subsection{Protocol B: Directional Deviation Detection (Resource Constrained)}
@@ -354,60 +405,102 @@ The Pair Consolidation Rate is the fraction of ground-truth pairs for which ther
 %----------------------------------------------------------------------------------------
 
 \section{Results}
+
 \subsection{Protocol A: Asymmetry and Split-Scale Calibration}
 \label{sec:results_protocol_a}
 
-TODO: Different model types may do differently well with different parameters. Create results where we compare MSE
-for a set L0, and L0 for set MSE.
-
 \paragraph{Setup.}
-We evaluate Protocol A on the synthetic signed-feature dataset described in \S5.1.
-Each ground-truth axis is active with probability $\rho=0.05$ and, when active, takes a positive sign with probability $p_+=0.7$ and a negative sign otherwise. Conditional on sign, magnitudes are drawn from a LogNormal$(\mu=0,\sigma=0.5)$ distribution for positives and an Exponential$(\lambda=1.5)$ distribution for negatives, with additive isotropic noise $\epsilon \sim \mathcal{N}(0, 0.1^2 I)$.
-All models use width $H=128$ and are trained for 50 epochs with identical optimization hyperparameters. We report mean $\pm$ standard deviation over three random seeds (0,1,2).
+We evaluate Protocol A on the synthetic signed-axis dataset described in \S\ref{sec:protocol_a} with
+$d=512$ input dimensions and $k=128$ ground-truth axes. Each axis is active with probability $\rho=0.05$ and, when active,
+takes a positive sign with probability $p_+=0.7$ and a negative sign otherwise. Conditional on sign, magnitudes are drawn from
+a LogNormal$(\mu=0,\sigma=0.5)$ distribution for positives and an Exponential$(\lambda=1.5)$ distribution for negatives, with
+additive isotropic noise $\epsilon \sim \mathcal{N}(0, 0.1^2 I)$.
+We generate 200k training samples, 20k validation samples, and 20k test samples. All models are trained for 50 epochs with
+Adam (learning rate $10^{-4}$, $\beta=(0.9,0.999)$), batch size 1024, and sparsity coefficient $\lambda=10^{-3}$.
+We report mean $\pm$ standard deviation over three random seeds (0, 1, 2).
+
+\paragraph{Evaluation protocol.}
+We evaluate calibration at the \emph{axis} level using the alignment and aggregation procedure in \S\ref{sec:protocol_a}.
+Concretely, we match axes using absolute cosine similarity between decoder columns and ground-truth directions, with a minimum
+alignment threshold of $\tau=0.9$. For non-negative baselines, we use the paired-atom aggregation $\hat{c}_j(x)$ when both a
+positively aligned and negatively aligned latent are available for a given axis. This gives non-negative models credit for the
+intended representation $(+u_j,-u_j)$ and ensures the comparison is not biased against baselines by the evaluation metric.
 
 \paragraph{Metrics.}
-We align learned decoder columns to ground-truth directions using cosine similarity and Hungarian matching (\S5.1), then compute split-regime calibration slopes $\gamma_+$ and $\gamma_-$ via separate least-squares fits on the positive and negative subsets of the data. We summarize calibration by (i) the mean slopes $\bar{\gamma}_\pm$ across matched axes and (ii) the mean absolute slope error $\mathbb{E}[|\gamma_\pm-1|]$ across matched axes (lower is better).
+We report reconstruction MSE on the test set, the average number of non-zero latents per example ($L_0$), and split-regime
+calibration slopes $\gamma_+$ and $\gamma_-$ together with their mean absolute errors. Because $\gamma_\pm$ can become unstable
+when a model collapses $\hat{c}_j(x)$ toward zero on one regime, we additionally compute per-regime coefficient-space MSE,
+Pearson correlation, and $R^2$; these diagnostics support the same conclusions and are included in the released artifacts.
 
 \begin{table}[t]
     \centering
-    \caption{Protocol A results (mean $\pm$ std over three seeds). $L_0$ denotes the average number of non-zero latents per example. $\bar{\gamma}_\pm$ is the mean split-regime calibration slope across matched axes. $\mathbb{E}[|\gamma_\pm-1|]$ is the mean absolute slope error across matched axes.}
+    \caption{Protocol A results (mean $\pm$ std over three seeds). $H$ denotes the SAE width. $L_0$ denotes the average number
+    of non-zero latents per example. $\bar{\gamma}_\pm$ is the mean split-regime calibration slope across axes, and
+    $\mathbb{E}[|\gamma_\pm-1|]$ is the mean absolute slope error (lower is better). Non-negative baselines are evaluated with
+    axis-level aggregation that credits paired atoms $(+u_j,-u_j)$ when present (\S\ref{sec:protocol_a}).}
     \label{tab:protocol_a_results}
     \small\begin{tabular}{lcccccc}
         \toprule
         Model & MSE$\downarrow$ & $L_0\downarrow$ & $\bar{\gamma}_+$ & $\bar{\gamma}_-$ & $\mathbb{E}[|\gamma_+-1|]\downarrow$ & $\mathbb{E}[|\gamma_--1|]\downarrow$ \\
         \midrule
-        ReLU SAE
-            & 0.016671 $\pm$ 0.000332 & 6.90 $\pm$ 0.06
-            & -82.244 $\pm$ 117.230 & 186.933 $\pm$ 56.460
-            & 244.736 $\pm$ 36.187 & 240.192 $\pm$ 93.588 \\
-        Gated SAE (non-negative)
-            & 0.012953 $\pm$ 0.000083 & 9.59 $\pm$ 0.38
-            & 1.167 $\pm$ 0.144 & -0.130 $\pm$ 0.064
-            & 0.520 $\pm$ 0.077 & 1.262 $\pm$ 0.050 \\
-        Sign-Aware Gated SAE (ours)
-            & \textbf{0.009963 $\pm$ 0.000005} & 9.17 $\pm$ 0.04
-            & 1.039 $\pm$ 0.004 & 1.056 $\pm$ 0.003
-            & \textbf{0.039 $\pm$ 0.004} & 0.056 $\pm$ 0.003 \\
-        Sign-Aware (symmetric magnitude)
-            & 0.009963 $\pm$ 0.000004 & 9.21 $\pm$ 0.07
-            & 1.044 $\pm$ 0.008 & 1.042 $\pm$ 0.006
-            & 0.044 $\pm$ 0.008 & \textbf{0.042 $\pm$ 0.006} \\
+        ReLU SAE ($H=128$)
+            & 0.017987 $\pm$ 0.001168 & 6.62 $\pm$ 0.28
+            & 0.780 $\pm$ 0.103 & -1.685 $\pm$ 1.363
+            & 0.499 $\pm$ 0.066 & 2.690 $\pm$ 1.371 \\
+        ReLU SAE ($H=256$)
+            & 0.017138 $\pm$ 0.000286 & 6.88 $\pm$ 0.19
+            & 0.913 $\pm$ 0.035 & -1.598 $\pm$ 0.784
+            & 0.413 $\pm$ 0.022 & 2.598 $\pm$ 0.784 \\
+        Gated SAE ($H=128$)
+            & 0.012945 $\pm$ 0.000060 & 9.61 $\pm$ 0.10
+            & 0.539 $\pm$ 0.023 & -0.056 $\pm$ 0.011
+            & 0.487 $\pm$ 0.023 & 1.056 $\pm$ 0.011 \\
+        Gated SAE ($H=256$)
+            & \textbf{0.009953 $\pm$ 0.000005} & 9.14 $\pm$ 0.02
+            & 1.028 $\pm$ 0.008 & 1.050 $\pm$ 0.007
+            & 0.039 $\pm$ 0.010 & 0.060 $\pm$ 0.011 \\
+        Signed Soft-Threshold SAE ($H=128$)
+            & 0.012038 $\pm$ 0.000241 & 128.00 $\pm$ 0.00
+            & 41.387 $\pm$ 1.669 & 24.501 $\pm$ 3.687
+            & 43.457 $\pm$ 1.053 & 31.385 $\pm$ 4.389 \\
+        Sign-Aware Gated SAE ($H=128$)
+            & 0.009963 $\pm$ 0.000004 & 9.15 $\pm$ 0.02
+            & 1.036 $\pm$ 0.001 & 1.053 $\pm$ 0.002
+            & \textbf{0.036 $\pm$ 0.001} & 0.053 $\pm$ 0.002 \\
+        Sign-Aware Gated SAE, symmetric magnitude ($H=128$)
+            & 0.009961 $\pm$ 0.000002 & 9.22 $\pm$ 0.10
+            & 1.047 $\pm$ 0.014 & 1.045 $\pm$ 0.013
+            & 0.047 $\pm$ 0.014 & \textbf{0.045 $\pm$ 0.013} \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-\paragraph{Sign-awareness resolves the negative-regime failure mode.}
-The non-sign-aware Gated SAE calibrates the positive regime moderately well ($\bar{\gamma}_+ \approx 1.17$), but fails on the negative regime: $\bar{\gamma}_- < 0$ and $\mathbb{E}[|\gamma_- - 1|] \approx 1.26$ (\cref{tab:protocol_a_results}). This is the expected representational limitation of non-negative latents: negative coefficients along a shared axis cannot be expressed directly without dedicating separate atoms to the opposite direction.
-In contrast, the Sign-Aware Gated SAE achieves near-ideal calibration on \emph{both} regimes simultaneously, with $\bar{\gamma}_+ \approx 1.04$, $\bar{\gamma}_- \approx 1.06$, and mean absolute slope errors below $0.06$ on both sides (\cref{tab:protocol_a_results}).
+\paragraph{The efficiency gap is representational, and sign-awareness closes it.}
+At width $H=128$, non-negative models cannot allocate paired atoms $(+u_j,-u_j)$ for all axes, and the deficit shows up as a
+systematic failure to calibrate the negative regime. The standard Gated SAE achieves moderate positive-side calibration
+($\bar{\gamma}_+ \approx 0.54$) but collapses the negative side ($\bar{\gamma}_- \approx -0.06$), yielding a large negative
+regime slope error ($\mathbb{E}[|\gamma_--1|]\approx 1.06$). The ReLU SAE baselines perform substantially worse, reflecting the
+combined effect of (i) the same non-negativity constraint and (ii) shrinkage in the standard $\ell_1$ objective.
 
-\paragraph{Reconstruction improves while maintaining comparable sparsity.}
-The Sign-Aware Gated SAE attains substantially lower reconstruction error than the non-sign-aware gated baseline (test MSE $0.009963$ vs.\ $0.012953$, a $23.1\%$ reduction), while using slightly \emph{fewer} active latents on average ($L_0$ $9.17$ vs.\ $9.59$). Relative to the plain ReLU SAE, the sign-aware model reduces MSE by $40.2\%$ (\cref{tab:protocol_a_results}).
+When we double the width of the non-negative Gated SAE to $H=256$, it can represent each signed axis with two latents and
+recovers near-ideal calibration on both regimes ($\bar{\gamma}_+\approx 1.03$, $\bar{\gamma}_-\approx 1.05$).
+Crucially, the Sign-Aware Gated SAE reaches essentially the same calibration quality \emph{at width $H=128$} using one latent
+per axis. Its reconstruction error (0.009963) is within 0.1\% of the $H=256$ non-negative gated baseline (0.009953), while
+using half the dictionary width. This is the intended resolution of the anticorrelation efficiency gap.
 
-\paragraph{Symmetric-magnitude ablation does not separate at this asymmetry level.}
-Enforcing symmetric magnitude scaling across polarities (tying $r^+=r^-$) produces essentially identical reconstruction error and very similar calibration statistics in this setting (\cref{tab:protocol_a_results}). Thus, for the default Protocol A generator parameters used here, the dominant empirical benefit comes from enabling \emph{signed} activations with a shared decoder direction; independent per-polarity magnitude scaling does not yield a measurable additional gain.
+\paragraph{Signed activations alone are not sufficient without the gated objective.}
+The Signed Soft-Threshold SAE can represent negative coefficients without paired atoms, but it performs poorly in this setting:
+it becomes dense ($L_0\approx 128$), exhibits severe miscalibration (very large $\gamma_\pm$ errors), and underperforms the
+gated models in reconstruction error. This supports the motivation for combining sign-awareness with the gated no-shrinkage
+training objective rather than adopting signed sparse coding activations in an otherwise standard SAE.
 
-\paragraph{Degenerate calibration in the ReLU SAE baseline.}
-The plain ReLU SAE attains the highest MSE among the compared models, and its fitted calibration slopes are extremely large in magnitude and unstable across seeds (\cref{tab:protocol_a_results}). This behavior is consistent with the least-squares slope becoming ill-conditioned when the model's predicted coefficients for one regime are near-zero or otherwise poorly aligned with the signed ground truth.
+\paragraph{Independent $r^+,r^-$ scaling is not a dominant factor at these settings.}
+Tying the per-polarity magnitude scales ($r_i^+=r_i^-$) yields virtually identical reconstruction error and very similar
+split-regime calibration to the full sign-aware model. In other words, for the default Protocol A generator parameters used
+here, the dominant empirical gain comes from enabling signed activations along a shared decoder direction, and we do not
+observe a consistent additional benefit from learning separate $r^+$ and $r^-$ values. This suggests the symmetric-magnitude
+variant is a reasonable default when prioritizing parameter minimality, while retaining the full model as a strictly more
+expressive option for settings with more extreme sign-conditioned asymmetry.
 
 \subsection{Protocol B: Directional Deviation Detection}
 \label{sec:results_protocol_b}

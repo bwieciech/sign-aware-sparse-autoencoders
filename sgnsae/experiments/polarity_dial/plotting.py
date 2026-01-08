@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import matplotlib
 
@@ -154,9 +154,13 @@ def plot_training_loss(
     model_dir: str,
 ) -> None:
     plots_dir = _ensure_plots_dir(model_dir)
-    epochs = training_metrics.get("epoch", list(range(1, len(training_metrics.get("loss_total", [])) + 1)))
+    epochs = training_metrics.get(
+        "epoch", list(range(1, len(training_metrics.get("loss_total", [])) + 1))
+    )
     plt.figure(figsize=(8, 4))
-    plt.plot(epochs, training_metrics["loss_total"], label="Total Loss", color="#1f77b4")
+    plt.plot(
+        epochs, training_metrics["loss_total"], label="Total Loss", color="#1f77b4"
+    )
     plt.plot(
         epochs,
         training_metrics["loss_reconstruction"],
@@ -220,3 +224,126 @@ def plot_gamma_comparison(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, bbox_inches="tight")
     plt.close()
+
+
+def plot_mse_vs_l0_tradeoff(tradeoff_summary: Dict[str, Any], output_path: str) -> None:
+    model_points = tradeoff_summary.get("models") or {}
+    plt.figure(figsize=(8, 5))
+    for model_name, points in model_points.items():
+        xs: List[float] = []
+        ys: List[float] = []
+        annotations: List[str] = []
+        for point in points:
+            test_l0 = point.get("test_l0")
+            test_mse = point.get("test_reconstruction_mse")
+            if test_l0 is None or test_mse is None:
+                continue
+            xs.append(float(test_l0))
+            ys.append(float(test_mse))
+            sparsity_coeff = point.get("sparsity_coeff")
+            annotations.append(
+                "" if sparsity_coeff is None else f"{float(sparsity_coeff):.3g}"
+            )
+        if not xs:
+            continue
+        ordering = np.argsort(xs)
+        xs_sorted = [xs[idx] for idx in ordering]
+        ys_sorted = [ys[idx] for idx in ordering]
+        annotations_sorted = [annotations[idx] for idx in ordering]
+        plt.plot(xs_sorted, ys_sorted, marker="o", label=model_name)
+        for x_val, y_val, label in zip(xs_sorted, ys_sorted, annotations_sorted):
+            if not label:
+                continue
+            plt.annotate(
+                label,
+                (x_val, y_val),
+                textcoords="offset points",
+                xytext=(4, 4),
+                fontsize=7,
+                color="#444444",
+            )
+    plt.xlabel("Test L0 (active latents per example)")
+    plt.ylabel("Test reconstruction MSE")
+    plt.title("Sparsity-Fidelity Trade-off (MSE vs L0)")
+    plt.legend()
+    plt.grid(axis="y", color="#e0e0e0")
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
+def plot_asymmetry_sweep_calibration(
+    asymmetry_summary: Dict[str, Any], output_path: str
+) -> None:
+    p_plus_grid = [
+        float(value) for value in (asymmetry_summary.get("p_plus_grid") or [])
+    ]
+    if not p_plus_grid:
+        raise ValueError("asymmetry_summary must include a non-empty p_plus_grid.")
+    models = list(asymmetry_summary.get("models") or [])
+    points = list(asymmetry_summary.get("points") or [])
+    if not models:
+        if points:
+            models = list((points[0].get("models") or {}).keys())
+    if not models:
+        raise ValueError("asymmetry_summary must include model names.")
+
+    tail_grid_key = None
+    tail_key = None
+    if "lognormal_sigma_grid" in asymmetry_summary:
+        tail_grid_key = "lognormal_sigma_grid"
+        tail_key = "lognormal_sigma"
+    if "exponential_lambda_grid" in asymmetry_summary:
+        tail_grid_key = "exponential_lambda_grid"
+        tail_key = "exponential_lambda"
+    if tail_grid_key is None or tail_key is None:
+        raise ValueError(
+            "asymmetry_summary must include either lognormal_sigma_grid or exponential_lambda_grid."
+        )
+    tail_values = [float(value) for value in asymmetry_summary.get(tail_grid_key) or []]
+    if not tail_values:
+        raise ValueError(f"{tail_grid_key} must be non-empty for asymmetry sweep.")
+
+    point_map: Dict[Tuple[float, float], Dict[str, Any]] = {}
+    for point in points:
+        p_plus = float(point.get("positive_sign_prob"))
+        tail_value = float(point.get(tail_key))
+        point_map[(p_plus, tail_value)] = point.get("models") or {}
+
+    n_cols = len(tail_values)
+    fig, axes = plt.subplots(2, n_cols, figsize=(max(6, 4 * n_cols), 6), sharex=True)
+    if n_cols == 1:
+        axes = np.array([[axes[0]], [axes[1]]])
+
+    for col_idx, tail_value in enumerate(tail_values):
+        ax_plus = axes[0, col_idx]
+        ax_minus = axes[1, col_idx]
+        for model_name in models:
+            plus_values: List[float] = []
+            minus_values: List[float] = []
+            for p_plus in p_plus_grid:
+                model_metrics = point_map.get((p_plus, tail_value), {}).get(
+                    model_name, {}
+                )
+                plus = model_metrics.get("mean_rel_error_plus")
+                minus = model_metrics.get("mean_rel_error_minus")
+                plus_values.append(np.nan if plus is None else float(plus))
+                minus_values.append(np.nan if minus is None else float(minus))
+            ax_plus.plot(p_plus_grid, plus_values, marker="o", label=model_name)
+            ax_minus.plot(p_plus_grid, minus_values, marker="o", label=model_name)
+
+        ax_plus.set_title(f"{tail_key}={tail_value:.3g}")
+        ax_plus.set_ylabel("Mean |gamma_+ - 1|")
+        ax_minus.set_ylabel("Mean |gamma_- - 1|")
+        ax_minus.set_xlabel("p_plus")
+        ax_plus.grid(axis="y", color="#e0e0e0")
+        ax_minus.grid(axis="y", color="#e0e0e0")
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=min(len(models), 4))
+    fig.suptitle("Asymmetry Sweep Calibration")
+    fig.tight_layout(rect=[0, 0, 1, 0.93])
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)

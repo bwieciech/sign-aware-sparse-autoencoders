@@ -14,7 +14,7 @@ from sgnsae.experiments.polarity_dial import evaluation as evaluation_module
 from sgnsae.experiments.polarity_dial import plotting as plotting_module
 from sgnsae.experiments.polarity_dial import runner as runner_module
 from sgnsae.experiments.polarity_dial import training as training_module
-from sgnsae.models import GatedSAE, SAE, SAEBase
+from sgnsae.models import GatedSAE, SAE, SAEBase, SignedSoftThresholdSAE
 
 
 class TestPolarityDialConfigValidation(unittest.TestCase):
@@ -221,6 +221,79 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 name="model", **{**base_kwargs, "resample_latents_epochs": 0.0}
             )
 
+    def test_model_config_rejects_symmetric_magnitude_without_sign_aware(self) -> None:
+        # given
+        base_kwargs = {
+            "sae_class": "SAE",
+            "sign_aware": False,
+            "single_activation_offset": False,
+            "reset_activation_offsets_on_resample": False,
+            "d_hidden": 2,
+            "sparsity_coeff": 0.0,
+            "learning_rate": 0.01,
+            "num_epochs": 1,
+            "batch_size": 2,
+            "adam_betas": (0.9, 0.999),
+            "symmetric_magnitude": True,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            config_module.PolarityDialModelVariantConfig(name="model", **base_kwargs)
+
+    def test_evaluation_config_rejects_unknown_alignment_mode(self) -> None:
+        # given
+        alignment_mode = "unsupported"
+
+        # when & then
+        with self.assertRaises(ValueError):
+            config_module.PolarityDialEvaluationConfig(alignment_mode=alignment_mode)
+
+    def test_load_config_rejects_non_object_evaluation(self) -> None:
+        # given
+        config_dict = {
+            "output_dir": "/tmp/output",
+            "device": "cpu",
+            "data": {
+                "seed": 1,
+                "num_train": 2,
+                "num_val": 1,
+                "num_test": 1,
+                "input_dim": 3,
+                "num_features": 2,
+                "activation_prob": 0.5,
+                "positive_sign_prob": 0.6,
+                "lognormal_mu": 0.0,
+                "lognormal_sigma": 0.4,
+                "exponential_lambda": 1.2,
+                "noise_std": 0.0,
+            },
+            "models": [
+                {
+                    "name": "relu",
+                    "sae_class": "SAE",
+                    "sign_aware": False,
+                    "single_activation_offset": False,
+                    "reset_activation_offsets_on_resample": False,
+                    "d_hidden": 2,
+                    "sparsity_coeff": 0.01,
+                    "learning_rate": 0.1,
+                    "num_epochs": 1,
+                    "batch_size": 2,
+                    "adam_betas": [0.9, 0.999],
+                }
+            ],
+            "evaluation": ["not", "a", "dict"],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(config_dict, f)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = config_module.load_experiment_config(config_path)
+
     def test_experiment_config_validation_errors(self) -> None:
         # given
         data_config = config_module.PolarityDialDataConfig(
@@ -258,6 +331,7 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 device="cpu",
                 data=data_config,
                 models=[model_config],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
             )
         with self.assertRaises(ValueError):
             config_module.PolarityDialExperimentConfig(
@@ -265,6 +339,7 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 device="invalid",
                 data=data_config,
                 models=[model_config],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
             )
         with self.assertRaises(ValueError):
             config_module.PolarityDialExperimentConfig(
@@ -272,6 +347,7 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 device="cpu",
                 data=data_config,
                 models=[],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
             )
         with self.assertRaises(ValueError):
             config_module.PolarityDialExperimentConfig(
@@ -279,6 +355,7 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 device="cpu",
                 data=data_config,
                 models=[model_config],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
                 log_every_n_steps=0,
             )
         with self.assertRaises(ValueError):
@@ -287,6 +364,7 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 device="cpu",
                 data=data_config,
                 models=[model_config],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
                 log_every_n_epochs=0,
             )
 
@@ -342,7 +420,7 @@ class TestPolarityDialEvaluationUtilities(unittest.TestCase):
         # when & then
         model.forward(torch.tensor([1.0]))
         with self.assertRaises(ValueError):
-            evaluation_module._get_decoder_directions(model)
+            evaluation_module._get_decoder_directions(model, normalize=True)
 
     def test_compute_gamma_handles_empty_and_zero_denominator(self) -> None:
         # given
@@ -434,15 +512,59 @@ class TestPolarityDialEvaluationUtilities(unittest.TestCase):
         predicted = torch.tensor([2.0, -2.0, 1.0])
 
         # when
-        metrics = evaluation_module._calculate_per_pair_metrics(
-            true_values, predicted, projection_factor=1.0, latent_index=0, feature_index=0, eps=1e-8, min_count=1
+        metrics = evaluation_module._calculate_per_axis_metrics(
+            true_values,
+            predicted,
+            eps=1e-8,
+            min_regime_samples=1,
         )
 
         # then
         self.assertAlmostEqual(metrics["gamma_plus"], 1.0)
         self.assertAlmostEqual(metrics["gamma_minus"], 1.0)
-        self.assertTrue(metrics["positive_mask"][0].item())
-        self.assertTrue(metrics["negative_mask"][1].item())
+        self.assertEqual(metrics["n_pos"], 1)
+        self.assertEqual(metrics["n_neg"], 1)
+
+    def test_compute_pearson_r_returns_none_when_denominator_zero(self) -> None:
+        # given
+        true_values = torch.tensor([1.0, 1.0])
+        predicted_values = torch.tensor([2.0, 2.0])
+
+        # when
+        pearson_r = evaluation_module._compute_pearson_r(
+            true_values, predicted_values, eps=0.0
+        )
+
+        # then
+        self.assertIsNone(pearson_r)
+
+    def test_compute_alignment_and_calibration_raises_without_reconstruction(
+        self,
+    ) -> None:
+        # given
+        evaluation_config = config_module.PolarityDialEvaluationConfig(
+            min_regime_samples=1,
+            max_points_per_regime_scatter=10,
+        )
+
+        class ModelWithoutReconstruction(torch.nn.Module):
+            def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+                return {"latents": torch.zeros(1, x.shape[0], 1)}
+
+        model = ModelWithoutReconstruction()
+        x_test = torch.zeros(2, 3)
+        coefficients_test = torch.zeros(2, 1)
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = evaluation_module.compute_alignment_and_calibration(
+                model,
+                x_test,
+                coefficients_test,
+                alignment={"matched_pairs": []},
+                axis_alignment={"axes": []},
+                evaluation_config=evaluation_config,
+            )
 
 
 class TestPolarityDialPlottingUtilities(unittest.TestCase):
@@ -499,13 +621,21 @@ class TestPolarityDialPlottingUtilities(unittest.TestCase):
             plotting_module.plot_calibration_scatter(scatter_data, "model", model_dir)
             plotting_module.plot_gamma_histograms(calibration, "model", model_dir)
             plotting_module.plot_training_loss(training_metrics, "model", model_dir)
-            plotting_module.plot_gamma_comparison({"model": calibration["summary"]}, comparison_path)
+            plotting_module.plot_gamma_comparison(
+                {"model": calibration["summary"]}, comparison_path
+            )
 
             # then
             plots_dir = os.path.join(model_dir, "plots")
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "calibration_scatter_model.png")))
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "gamma_hist_model.png")))
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "training_loss_model.png")))
+            self.assertTrue(
+                os.path.isfile(os.path.join(plots_dir, "calibration_scatter_model.png"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(plots_dir, "gamma_hist_model.png"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(plots_dir, "training_loss_model.png"))
+            )
             self.assertTrue(os.path.isfile(comparison_path))
 
 
@@ -528,7 +658,33 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
 
         # when & then
         with self.assertRaises(ValueError):
-            training_module._instantiate_model(config, input_dim=2, steps_per_epoch=1, device="cpu")
+            training_module._instantiate_model(
+                config, input_dim=2, steps_per_epoch=1, device="cpu"
+            )
+
+    def test_instantiate_model_supports_signed_soft_threshold(self) -> None:
+        # given
+        config = config_module.PolarityDialModelVariantConfig(
+            name="signed_soft_threshold",
+            sae_class="SignedSoftThresholdSAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+
+        # when
+        model = training_module._instantiate_model(
+            config, input_dim=2, steps_per_epoch=2, device="cpu"
+        )
+
+        # then
+        self.assertIsInstance(model, SignedSoftThresholdSAE)
 
     def test_log_helpers_emit_expected_text(self) -> None:
         # given
@@ -609,6 +765,7 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
                 noise_std=0.0,
             ),
             models=[model_config],
+            evaluation=config_module.PolarityDialEvaluationConfig(),
             verbose=False,
         )
         data = {"x_train": torch.ones(2, 2)}
@@ -622,7 +779,10 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
                 return {"latents": torch.zeros(1, x.shape[0], 1)}
 
             def calculate_losses(
-                self, y_true: torch.Tensor, sparsity_coeffs: torch.Tensor, output: Dict[str, torch.Tensor]
+                self,
+                y_true: torch.Tensor,
+                sparsity_coeffs: torch.Tensor,
+                output: Dict[str, torch.Tensor],
             ) -> Dict[str, torch.Tensor]:
                 return {
                     "losses": torch.tensor([float("nan")]),
@@ -630,11 +790,15 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
                     "sparsity_losses": torch.tensor([0.0]),
                 }
 
-            def resample_dead_latents(self, inactive_latents_count: torch.Tensor) -> torch.Tensor:
+            def resample_dead_latents(
+                self, inactive_latents_count: torch.Tensor
+            ) -> torch.Tensor:
                 return torch.zeros_like(inactive_latents_count, dtype=torch.bool)
 
         # when
-        with patch.object(training_module, "_instantiate_model", return_value=NaNModel()):
+        with patch.object(
+            training_module, "_instantiate_model", return_value=NaNModel()
+        ):
             result = training_module.run_training_for_variant(
                 experiment_config, data, model_config, device="cpu"
             )
@@ -646,7 +810,12 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
     def test_persist_model_artifacts_writes_files(self) -> None:
         # given
         model = torch.nn.Linear(2, 2)
-        training_metrics = {"epoch": [1], "loss_total": [1.0], "loss_reconstruction": [1.0], "loss_sparsity": [0.0]}
+        training_metrics = {
+            "epoch": [1],
+            "loss_total": [1.0],
+            "loss_reconstruction": [1.0],
+            "loss_sparsity": [0.0],
+        }
         model_config = config_module.PolarityDialModelVariantConfig(
             name="relu",
             sae_class="SAE",
@@ -670,8 +839,12 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
 
             # then
             self.assertTrue(os.path.isfile(os.path.join(model_dir, "model.pt")))
-            self.assertTrue(os.path.isfile(os.path.join(model_dir, "model_config.json")))
-            self.assertTrue(os.path.isfile(os.path.join(model_dir, "training_metrics.json")))
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "model_config.json"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "training_metrics.json"))
+            )
 
     def test_instantiate_model_builds_gated_sae(self) -> None:
         # given
@@ -690,7 +863,9 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
         )
 
         # when
-        model = training_module._instantiate_model(config, input_dim=2, steps_per_epoch=2, device="cpu")
+        model = training_module._instantiate_model(
+            config, input_dim=2, steps_per_epoch=2, device="cpu"
+        )
 
         # then
         self.assertIsInstance(model, GatedSAE)
@@ -728,11 +903,14 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
                 noise_std=0.0,
             ),
             models=[model_config],
+            evaluation=config_module.PolarityDialEvaluationConfig(),
             log_every_n_steps=1,
             log_every_n_epochs=1,
             verbose=True,
         )
-        data = {"x_train": torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, -0.5]])}
+        data = {
+            "x_train": torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, -0.5]])
+        }
 
         # when
         with patch.object(training_module, "_log_step_progress") as log_step_mock:
@@ -777,6 +955,7 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
                 noise_std=0.0,
             ),
             models=[model_config],
+            evaluation=config_module.PolarityDialEvaluationConfig(),
             log_every_n_steps=1,
             log_every_n_epochs=1,
             verbose=False,
@@ -817,7 +996,9 @@ class TestSAEBaseResample(unittest.TestCase):
 
         # then
         self.assertTrue(mask[0, 0])
-        torch.testing.assert_close(model.W_dec[:, :, 0].squeeze(0), expected[0], atol=0, rtol=0)
+        torch.testing.assert_close(
+            model.W_dec[:, :, 0].squeeze(0), expected[0], atol=0, rtol=0
+        )
         torch.testing.assert_close(model.b_enc[0, 0], torch.tensor(0.0), atol=0, rtol=0)
         torch.testing.assert_close(model.act_offset[0, 0], torch.tensor(1e-3))
 
@@ -892,7 +1073,10 @@ class TestSAEBaseResample(unittest.TestCase):
                 return super().forward(x)
 
             def calculate_losses(
-                self, y_true: torch.Tensor, sparsity_coeffs: torch.Tensor, output: Dict[str, torch.Tensor]
+                self,
+                y_true: torch.Tensor,
+                sparsity_coeffs: torch.Tensor,
+                output: Dict[str, torch.Tensor],
             ) -> Dict[str, torch.Tensor]:
                 return super().calculate_losses(y_true, sparsity_coeffs, output)
 
@@ -927,7 +1111,9 @@ class TestGatedSAEBehavior(unittest.TestCase):
             device="cpu",
         )
         with torch.no_grad():
-            model.W_dec.data = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])  # shared weights => identity dictionary
+            model.W_dec.data = torch.tensor(
+                [[[1.0, 0.0], [0.0, 1.0]]]
+            )  # shared weights => identity dictionary
             model.b_enc.data = torch.zeros(1, 2)
             model.b_dec.data = torch.zeros(1, 2)
             model.log_alpha_gate.data.zero_()
@@ -1032,7 +1218,9 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
     def test_build_comparison_summary_handles_none(self) -> None:
         # given
         calibration_by_model = {
-            "a": {"summary": {"mean_rel_error_plus": None, "mean_rel_error_minus": None}},
+            "a": {
+                "summary": {"mean_rel_error_plus": None, "mean_rel_error_minus": None}
+            },
             "b": {"summary": {"mean_rel_error_plus": 0.2, "mean_rel_error_minus": 0.1}},
         }
 
@@ -1040,12 +1228,20 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
         summary = runner_module._build_comparison_summary(calibration_by_model)
 
         # then
-        self.assertIsNone(summary["relative_to_baseline"]["a"]["delta_mean_rel_error_plus"])
-        self.assertIsNone(summary["relative_to_baseline"]["b"]["delta_mean_rel_error_minus"])
+        self.assertIsNone(
+            summary["relative_to_baseline"]["a"]["delta_mean_rel_error_plus"]
+        )
+        self.assertIsNone(
+            summary["relative_to_baseline"]["b"]["delta_mean_rel_error_minus"]
+        )
 
     def test_log_wandb_artifacts_handles_none(self) -> None:
         # given
-        training_metrics = {"loss_total": [], "loss_reconstruction": [], "loss_sparsity": []}
+        training_metrics = {
+            "loss_total": [],
+            "loss_reconstruction": [],
+            "loss_sparsity": [],
+        }
         calibration = {"summary": {"mean_gamma_plus": 1.0}}
 
         # when & then
@@ -1084,6 +1280,7 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
                 noise_std=0.0,
             ),
             models=[model_config],
+            evaluation=config_module.PolarityDialEvaluationConfig(),
             wandb_project="project",
             wandb_api_key="key",
         )
@@ -1132,6 +1329,7 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
                 noise_std=0.0,
             ),
             models=[model_config],
+            evaluation=config_module.PolarityDialEvaluationConfig(),
             wandb_project="project",
             wandb_api_key="key",
         )
@@ -1176,6 +1374,7 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
                 noise_std=0.0,
             ),
             models=[model_config],
+            evaluation=config_module.PolarityDialEvaluationConfig(),
             wandb_api_key="secret",
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1242,6 +1441,7 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
                 device="cpu",
                 data=data_config,
                 models=[model_config],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
                 run_id="fixed",
             )
 

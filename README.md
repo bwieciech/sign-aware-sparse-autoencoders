@@ -2,7 +2,7 @@
 
 ## Polarity Dial Experiment (Protocol A)
 
-This experiment trains SAEs on a synthetic dataset where each ground-truth feature can appear with either sign, but with asymmetric sign frequency and asymmetric magnitude distributions (LogNormal for positives, Exponential for negatives). The goal is to reproduce the Protocol A results in the paper by running a small set of predefined configs (seeds 0, 1, 2), then confirming that the expected artifacts were produced and that the sign-aware gated model behaves correctly.
+This experiment trains SAEs on a synthetic dataset where each ground-truth feature can appear with either sign, but with asymmetric sign frequency and asymmetric magnitude distributions (LogNormal for positives, Exponential for negatives). The goal is to reproduce the Protocol A results in the paper by running a small set of predefined configs (seeds 0, 1, 2), then confirming that the expected artifacts were produced and that evaluation is axis-aware (so non-negative baselines that learn both \(+u_j\) and \(-u_j\) are credited correctly).
 
 ### 0) Prerequisites
 
@@ -24,11 +24,16 @@ You will run three configs, one per seed:
 2) `configs/polarity_dial_paper_seed1.json`
 3) `configs/polarity_dial_paper_seed2.json`
 
-Each config trains three models:
+Each config trains the following model variants (this is the default set used for paper-quality Protocol A comparisons):
 
-- `relu_sae` (SAE, non-gated baseline)
-- `gated_sae` (GatedSAE, sign_aware=false)
-- `sign_aware_gated_sae` (GatedSAE, sign_aware=true)
+- `relu_sae` (SAE, non-gated baseline, width = num_features)
+- `relu_sae_2x` (SAE, width doubled to allow separate +u_j and -u_j atoms)
+- `gated_sae` (GatedSAE, sign_aware=false, width = num_features)
+- `gated_sae_2x` (GatedSAE, sign_aware=false, width doubled)
+- `signed_soft_threshold` (SignedSoftThresholdSAE, signed-latent baseline, width = num_features)
+- `sign_aware_gated_sae` (GatedSAE, sign_aware=true, width = num_features)
+
+If you only want the “core three” models (relu_sae, gated_sae, sign_aware_gated_sae), remove the *_2x variants and signed_soft_threshold from the config.
 
 All runs write into:
 
@@ -38,6 +43,9 @@ All runs write into:
 Notes:
 - `device: "auto"` uses CUDA if available, otherwise CPU.
 - If you need CPU only, set `"device": "cpu"` in the config.
+
+- Axis-aware evaluation uses `evaluation.min_axis_abs_cos` (default 0.9) to prevent spurious axis aggregation: any +/- atom below the threshold is treated as absent for that axis.
+- For reproducibility, each model is trained with a deterministic per-model seed derived from (data.seed, model.name), so results do not depend on model ordering; this is logged in `training_metrics.json`.
 
 ### 2) Run the experiments
 
@@ -69,6 +77,7 @@ For each `<run_dir>` produced above, verify the following artifacts exist.
 #### 3.1 Run-level artifacts (in `<run_dir>/`)
 
 - `config.json` (resolved config with secrets redacted)
+- `environment.json` (Python, torch, CUDA, and key dependency versions for reproducibility)
 - `comparison_summary.json` (aggregated evaluation summaries for all models in this run)
 - `gamma_diff_bar_comparison.png` (bar chart comparing gamma calibration error across models)
 
@@ -79,7 +88,7 @@ For each `<run_dir>` produced above, verify the following artifacts exist.
 - `coefficients_stats.json` (summary statistics of generated coefficients)
 - `sampled_data.pt` (small preview of samples and coefficients)
 
-#### 3.3 Per-model artifacts (for each model `relu_sae`, `gated_sae`, `sign_aware_gated_sae`)
+#### 3.3 Per-model artifacts (for each model listed in the config)
 
 Each model has a directory:
 `<run_dir>/models/<model_name>/`
@@ -90,6 +99,7 @@ Inside, verify:
 - `model_config.json` (exact model hyperparameters used)
 - `training_metrics.json` (loss curves)
 - `alignment.json` (latent-to-ground-truth matching)
+- `axis_alignment.json` (axis-aware mapping, including two-atom aggregation info for non-negative models)
 - `calibration.json` (per-pair gamma metrics and summary)
 
 Plots (in `<run_dir>/models/<model_name>/plots/`):
@@ -100,12 +110,18 @@ Plots (in `<run_dir>/models/<model_name>/plots/`):
 
 If any of these artifacts are missing, treat the run as incomplete and fix the underlying error before proceeding.
 
+If sweeps are enabled in the config, verify these run-level artifacts exist:
+- `mse_vs_l0_tradeoff.json` and `mse_vs_l0_tradeoff.png` (sparsity-fidelity sweep)
+- `asymmetry_sweep_summary.json` and `asymmetry_sweep_calibration.png` (asymmetry sweep)
+
 ### 4) What results to check (quick interpretation guide)
 
 Open `<run_dir>/comparison_summary.json`. This file contains, for each model, a `summary` object derived from `calibration.json`. At minimum, confirm:
 
 - `sign_aware_gated_sae` produces meaningful calibration on both sides (both `gamma_plus` and `gamma_minus` are present for many matched pairs).
-- `gated_sae` and `relu_sae` are expected to struggle on the negative side unless they effectively allocate separate atoms for the two directions (non-negative latents cannot directly represent negative coefficients along the same axis).
+- `gated_sae` and `relu_sae` may struggle on the negative side at fixed width unless they effectively allocate separate atoms for the two directions.
+- When `relu_sae_2x` or `gated_sae_2x` are enabled, they should improve negative-regime calibration if they learn both \(+u_j\) and \(-u_j\), and the axis-aware evaluation should reflect that via `axis_alignment.json`.
+- Use the per-regime diagnostics in `calibration.json` (`coef_mse_pos/neg`, `pearson_r_pos/neg`, `r2_pos/neg`, and `n_pos/n_neg`) to detect ill-conditioned fits.
 
 Then open `<run_dir>/gamma_diff_bar_comparison.png` and confirm it visually reflects the above behavior for that seed.
 
@@ -128,7 +144,7 @@ cp configs/polarity_dial_paper_seed1.json configs/polarity_dial_paper_seed1_abla
 cp configs/polarity_dial_paper_seed2.json configs/polarity_dial_paper_seed2_ablation.json
 ```
 
-2) In each `*_ablation.json`, add the model entry below to the `"models"` list (fourth model). Do not change the `"data"` section so the dataset stays identical for that seed.
+2) In each `*_ablation.json`, add the model entry below as an additional entry in the `"models"` list (seventh model if you keep the default six). Do not change the `"data"` section so the dataset stays identical for that seed.
 
 Example model entry:
 ```json
@@ -151,19 +167,19 @@ Example model entry:
 3) Run the ablation configs (same order as the base runs):
 
 Seed 0 ablation:
-`bash
+```bash
 .venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed0_ablation.json
-`
+```
 
 Seed 1 ablation:
-`bash
+```bash
 .venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed1_ablation.json
-`
+```
 
 Seed 2 ablation:
-`bash
+```bash
 .venv/bin/python -m sgnsae.scripts.run_polarity_dial_experiment --config-path configs/polarity_dial_paper_seed2_ablation.json
-`
+```
 
 Expected outputs: the run should produce the same artifacts as the base runs, plus one additional model directory:
 `<run_dir>/models/sign_aware_gated_sae_symmetric_mag/`
@@ -178,7 +194,7 @@ This paired comparison per seed is the intended evidence for the claim that inde
 
 - If you see NaNs during training, the training loop will terminate early and mark `training_metrics.json` with `terminated_early`. Reduce the learning rate or increase `noise_std` slightly to stabilize the dataset.
 - If you expected CUDA but the run used CPU, confirm `device` is `"auto"` or `"cuda"` and that `torch.cuda.is_available()` is true in your environment.
-- If `sign_aware: true` is set, the config must specify `reset_activation_offsets_on_resample` and `single_activation_offset` (even if you do not plan to resample)._
+- If `sign_aware: true` is set, the config must specify `reset_activation_offsets_on_resample` and `single_activation_offset` (even if you do not plan to resample).
 
 ### Paper reproduction configs
 - Configs live under `configs/` with exact parameters from the draft:

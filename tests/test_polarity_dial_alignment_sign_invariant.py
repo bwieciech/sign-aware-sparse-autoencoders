@@ -1,6 +1,7 @@
 import unittest
 import torch
 
+from sgnsae.experiments.polarity_dial.config import PolarityDialEvaluationConfig
 from sgnsae.experiments.polarity_dial.evaluation import align_decoder_and_features
 
 
@@ -13,6 +14,7 @@ class DummyDecoder(torch.nn.Module):
 class TestAlignmentSignInvariant(unittest.TestCase):
     def test_alignment_matches_antipodal_decoder(self) -> None:
         # given
+        evaluation_config = PolarityDialEvaluationConfig()
         feature_directions = torch.tensor(
             [[1.0, 0.0], [0.0, 1.0]],
             dtype=torch.float32,
@@ -25,7 +27,9 @@ class TestAlignmentSignInvariant(unittest.TestCase):
         model = DummyDecoder(W_dec)
 
         # when
-        alignment, _ = align_decoder_and_features(model, feature_directions)
+        alignment, _, _ = align_decoder_and_features(
+            model, feature_directions, evaluation_config
+        )
         feature_to_latent = {
             p["feature_index"]: p["latent_index"] for p in alignment["matched_pairs"]
         }

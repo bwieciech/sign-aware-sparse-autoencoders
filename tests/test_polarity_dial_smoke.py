@@ -59,21 +59,73 @@ class TestPolarityDialSmoke(unittest.TestCase):
             self.assertTrue(os.path.isdir(run_dir))
             self.assertTrue(os.path.isfile(os.path.join(run_dir, "config.json")))
             data_dir = os.path.join(run_dir, "data")
-            self.assertTrue(os.path.isfile(os.path.join(data_dir, "generator_config.json")))
-            self.assertTrue(os.path.isfile(os.path.join(data_dir, "coefficients_stats.json")))
+            self.assertTrue(
+                os.path.isfile(os.path.join(data_dir, "generator_config.json"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(data_dir, "coefficients_stats.json"))
+            )
             self.assertTrue(os.path.isfile(os.path.join(data_dir, "sampled_data.pt")))
             model_dir = os.path.join(run_dir, "models", "relu_sae_smoke")
-            self.assertTrue(os.path.isfile(os.path.join(model_dir, "model_config.json")))
-            self.assertTrue(os.path.isfile(os.path.join(model_dir, "training_metrics.json")))
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "model_config.json"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "training_metrics.json"))
+            )
             self.assertTrue(os.path.isfile(os.path.join(model_dir, "alignment.json")))
+            self.assertTrue(
+                os.path.isfile(os.path.join(model_dir, "axis_alignment.json"))
+            )
             self.assertTrue(os.path.isfile(os.path.join(model_dir, "calibration.json")))
+            with open(os.path.join(model_dir, "model_config.json"), "r") as f:
+                model_config = json.load(f)
+            self.assertIn("parameter_count", model_config)
+            self.assertIn("d_hidden_effective", model_config)
             plots_dir = os.path.join(model_dir, "plots")
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "calibration_scatter_relu_sae_smoke.png")))
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "gamma_hist_relu_sae_smoke.png")))
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "gamma_plus_minus_strip_relu_sae_smoke.png")))
-            self.assertTrue(os.path.isfile(os.path.join(plots_dir, "training_loss_relu_sae_smoke.png")))
-            self.assertTrue(os.path.isfile(os.path.join(run_dir, "comparison_summary.json")))
-            self.assertTrue(os.path.isfile(os.path.join(run_dir, "gamma_diff_bar_comparison.png")))
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(plots_dir, "calibration_scatter_relu_sae_smoke.png")
+                )
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(plots_dir, "gamma_hist_relu_sae_smoke.png"))
+            )
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(plots_dir, "gamma_plus_minus_strip_relu_sae_smoke.png")
+                )
+            )
+            self.assertTrue(
+                os.path.isfile(
+                    os.path.join(plots_dir, "training_loss_relu_sae_smoke.png")
+                )
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(run_dir, "comparison_summary.json"))
+            )
+            with open(os.path.join(run_dir, "comparison_summary.json"), "r") as f:
+                comparison_summary = json.load(f)
+            self.assertIn("model_metadata", comparison_summary)
+            self.assertIn("relu_sae_smoke", comparison_summary["model_metadata"])
+            self.assertIn(
+                "parameter_count",
+                comparison_summary["model_metadata"]["relu_sae_smoke"],
+            )
+            self.assertIn(
+                "model_seed",
+                comparison_summary["model_metadata"]["relu_sae_smoke"],
+            )
+            with open(os.path.join(model_dir, "training_metrics.json"), "r") as f:
+                training_metrics = json.load(f)
+            self.assertIn("model_seed", training_metrics)
+            self.assertEqual(
+                training_metrics["model_seed"],
+                comparison_summary["model_metadata"]["relu_sae_smoke"]["model_seed"],
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(run_dir, "gamma_diff_bar_comparison.png"))
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

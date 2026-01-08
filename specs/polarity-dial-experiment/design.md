@@ -5,9 +5,10 @@
 This document describes the design of Protocol A ("Polarity Dial") for evaluating the Sign-Aware Gated Sparse Autoencoder (SA-GSAE) against baselines (ReLU SAE and standard Gated SAE) on synthetic data with asymmetric, signed features. The design focuses on:
 - A synthetic data generator that produces inputs with signed feature coefficients whose positive and negative regimes follow different magnitude distributions.
 - A unified experiment runner that trains multiple model variants under identical data and hyperparameters.
-- A calibration and alignment evaluation module that computes separate scaling factors for positive and negative regimes along each latent axis.
+- A calibration and alignment evaluation module that computes separate scaling factors for positive and negative regimes along each ground-truth axis, using an axis-aware alignment that is fair to non-negative baselines that may allocate two latents per axis.
 - A plotting layer that produces clear, publication-quality visualizations of calibration behavior.
 - A structured output directory and file format for storing configurations, metrics, and plots.
+- A sweep runner that produces (1) sparsity-fidelity trade-off curves (MSE vs \(L_0\)) over sparsity strengths and (2) an asymmetry sweep over generator parameters (the "dial").
 
 The implementation will be added to the existing `sgnsae` package as a self-contained experiment module.
 
@@ -26,7 +27,7 @@ The experiment is split into four main subsystems:
 
 3. Evaluation and calibration:
    - Module: `sgnsae.experiments.polarity_dial.evaluation`
-   - Implements latent–feature alignment, coefficient extraction, split-scale calibration estimation (\(\gamma_+\), \(\gamma_-\)), and summary statistics.
+   - Implements axis-aware alignment, axis-level coefficient extraction, split-scale calibration estimation (\(\gamma_+\), \(\gamma_-\)), robustness diagnostics (correlation, coefficient MSE, \(R^2\)), and summary statistics.
 
 4. Plotting and reporting:
    - Module: `sgnsae.experiments.polarity_dial.plotting`
@@ -57,23 +58,43 @@ Configurations are modeled as dataclasses (or Pydantic models if strict validati
   - `noise_std: float` (\(\sigma\); standard deviation of Gaussian noise added to each sample)
 
 - `PolarityDialModelVariantConfig`:
-  - `name: str` (e.g., `"relu_sae"`, `"gated_sae"`, `"sign_aware_gated_sae"`)
-  - `sae_class: str` (`"SAE"` or `"GatedSAE"`)
-  - `sign_aware: bool`
-  - `single_activation_offset: bool`
-  - `reset_activation_offsets_on_resample: bool`
+  - `name: str` (unique run name, used for directory naming)
+  - `sae_class: str` (`"SAE"`, `"GatedSAE"`, `"SignedSoftThresholdSAE"`)
+  - `sign_aware: bool` (for GatedSAE only)
+  - `symmetric_magnitude: bool` (optional ablation for sign-aware GatedSAE)
+  - `single_activation_offset: bool` (for sign-aware GatedSAE only)
+  - `reset_activation_offsets_on_resample: bool` (for sign-aware GatedSAE only)
+  - `resample_latents_epochs: Optional[int]` (optional; resample “dead” latents every N epochs)
   - `d_hidden: int` (dictionary width)
-  - `sparsity_coeff: float` (single value for this experiment; grid search is not the focus here)
+  - `sparsity_coeff: float` (lambda for sparsity)
   - `learning_rate: float`
   - `num_epochs: int`
   - `batch_size: int`
   - `adam_betas: Tuple[float, float]`
+  - NOTE: “2x width baselines” are represented as separate model entries with `d_hidden = 2 * num_features`.
+
+- `PolarityDialEvaluationConfig`:
+  - `alignment_mode: str` (e.g., `"axis_aware_abs_cos"`)
+  - `axis_aggregation_for_nonnegative: bool` (whether to aggregate +/- latents for non-negative models)
+  - `normalize_decoder_for_eval: bool` (whether to use normalized decoder columns in cosine computations)
+  - `min_axis_abs_cos: float` (minimum absolute cosine required to accept a latent as representing an axis in axis-aggregation mode, default `0.9`)
+  - `min_regime_samples: int` (minimum samples in a regime to compute \(\gamma_+\) or \(\gamma_-\))
+  - `max_points_per_regime_scatter: int` (subsample points for scatter plots)
+
+- `PolarityDialSweepConfig`:
+  - `sparsity_coeff_grid: List[float]` (optional; if provided, run MSE vs \(L_0\) sweeps)
+  - `p_plus_grid: List[float]` (optional; if provided, run asymmetry sweeps)
+  - `lognormal_sigma_grid: List[float]` (optional)
+  - `exponential_lambda_grid: List[float]` (optional)
+  - `sweep_mode: str` (one of: `"none"`, `"sparsity"`, `"asymmetry"`, `"both"`)
 
 - `PolarityDialExperimentConfig`:
   - `output_dir: str`
-  - `device: Literal["cpu", "cuda"]` (with `"cuda"` chosen automatically if available unless overridden)
+  - `device: str` (`"auto"`, `"cpu"`, `"cuda"`)
   - `data: PolarityDialDataConfig`
   - `models: List[PolarityDialModelVariantConfig]`
+  - `evaluation: PolarityDialEvaluationConfig`
+  - `sweeps: PolarityDialSweepConfig`
 
 ### Data Generation Component
 
@@ -117,7 +138,12 @@ Random seeds:
   - Feature directions.
   - All Bernoulli draws (`active_j`, `s_j`).
   - All magnitude draws and noise.
-- Training and evaluation use deterministic seeding (`torch.manual_seed`, `numpy.random.seed`) per run to ensure reproducibility.
+
+- Additionally, each *model variant* is trained with a deterministic *per-model seed* derived from `(data.seed, model_config.name)`:
+  - This prevents “model ordering” effects when multiple models are trained in the same run (RNG state should not leak across models).
+  - Recommended implementation: `model_seed = stable_hash(f\"{data.seed}:{model_name}\") % 2**31`.
+  - The runner reseeds (Python, NumPy, Torch CPU, Torch CUDA) immediately before instantiating and training each model.
+  - The derived `model_seed` is persisted in per-model artifacts (`training_metrics.json`).
 
 Splits:
 - Generation uses disjoint random draws for train, validation, and test sets.
@@ -131,6 +157,8 @@ Responsibilities:
 - Wrap the synthetic data in `TensorDataset`/`DataLoader` instances.
 - Instantiate SAE variants using `PolarityDialModelVariantConfig`.
 - Reuse `instantiate_model`, `run_training_step`, and related utilities from `sgnsae.scripts.train_sparse_autoencoder` where possible, but operate directly on tensors instead of JSON embeddings.
+- Ensure deterministic DataLoader shuffling per model by passing an explicit `generator` seeded with `model_seed`.
+- Persist `model_seed` so the run can be reproduced without relying on global RNG state.
 
 Key function:
 
@@ -155,56 +183,88 @@ Model widths:
   - For standard Gated SAE: `sae_class="GatedSAE"`, `sign_aware=False`.
   - For Sign-Aware Gated SAE: `sae_class="GatedSAE"`, `sign_aware=True`, `single_activation_offset=False` (dual offsets to emulate Bi-Jump dead zone), `reset_activation_offsets_on_resample=True`.
 
+  - For SignedSoftThreshold SAE (signed-latent baseline):
+    - `sae_class="SignedSoftThresholdSAE"` (or equivalent).
+    - The implementation MUST be scale-invariant: use a normalized decoder `D_norm` in forward pass and compute `z = D_norm^T (x - b_dec) + b_enc` (or an equivalent tied parameterization) before soft-thresholding.
+
 ### Evaluation and Calibration Component
 
 Module: `sgnsae.experiments.polarity_dial.evaluation`
 
 Responsibilities:
-- Align decoder columns with ground-truth feature directions.
-- Extract scalar coefficients from reconstructions.
-- Compute split-scale calibration factors \(\gamma_+\) and \(\gamma_-\).
+- Align decoder columns with ground-truth feature directions in an axis-aware way.
+- Extract axis-level scalar coefficient estimates \(\hat{c}_j(x)\) for each ground-truth axis \(u_j\), in a way that credits baselines that allocate two opposite-direction atoms.
+- Compute split-scale calibration factors \(\gamma_+\) and \(\gamma_-\) at the axis level.
+- Compute robust per-regime diagnostics (correlation, coefficient MSE, \(R^2\)).
 
-Latent–feature alignment:
-1. Obtain decoder directions:
-   - For `SAE`: decoder matrix `D` is derived from model’s `W_dec_norm`; each latent corresponds to `D[:, i]`.
-   - For `GatedSAE`: similarly use normalized `W_dec`.
-2. Compute cosine similarity matrix:
-   - `S[i, j] = cos(D[:, i], u_j)`.
-3. Apply Hungarian matching:
-   - Use `scipy.optimize.linear_sum_assignment` on `-S` (to maximize total cosine similarity).
-   - Result: mapping `latent_index -> feature_index` for matched pairs.
+Decoder preprocessing for evaluation:
+1. Extract decoder directions as columns `D[:, i]`.
+2. If `normalize_decoder_for_eval=true`, normalize each column to unit norm for evaluation only:
+   - `D_eval[:, i] = D[:, i] / (||D[:, i]|| + eps)`.
+3. Record in `alignment.json` whether normalization was applied.
+
+Axis-aware alignment:
+1. Compute signed cosine similarity:
+   - `S_signed[i, j] = cos(D_eval[:, i], u_j)`.
+2. Compute axis similarity:
+   - `S_axis[i, j] = abs(S_signed[i, j])`.
+3. Apply Hungarian matching on `-S_axis` to produce an initial one-to-one mapping from latents to axes:
+   - Store `(latent_index, axis_index=j, signed_cos=S_signed[i,j], axis_cos=abs(S_signed[i,j]))`.
+4. Derive an axis-level mapping for non-negative models when `axis_aggregation_for_nonnegative=true`:
+   - For each axis `j`, select up to two latents:
+     - `i_pos`: the best latent with `S_signed[i, j] >= 0` (aligned with `+u_j`),
+     - `i_neg`: the best latent with `S_signed[i, j] < 0` (aligned with `-u_j`),
+     - subject to `evaluation.min_axis_abs_cos` (default `0.9`).
+   - This mapping is many-to-one: two latents may map to the same axis.
+   - Store this mapping in `axis_alignment.json` (per axis: `latent_pos`, `latent_neg`, and their cosine values).
 
 Coefficient estimation:
-1. For each matched pair `(i, j)` and each sample `x`:
-   - Ground-truth coefficient: `c_j(x)` (from `coefficients_*` tensors).
-   - Model coefficient estimate:
-     - Compute reconstruction using only latent `i`:
-       - For autoencoders that output `y_pred`: extract per-latent contribution via projected latent `a_i(x)` and decoder column `D[:, i]`.
-       - In practice, for simplicity, approximate `hat_c_i(x) = u_j^T (D[:, i] * a_i(x))`, where `a_i(x)` is the scalar latent activation for unit `i`.
-2. Split data by sign:
-   - Positive regime: samples where `c_j(x) > 0`.
-   - Negative regime: samples where `c_j(x) < 0`.
+We compute axis-level predicted coefficients \(\hat{c}_j(x)\) on a held-out split (default test).
+
+1. Ground-truth coefficients:
+   - `c_true[:, j]` is taken directly from `coefficients_test` (signed, zero when inactive).
+
+2. Predicted coefficients for sign-aware models:
+   - For each axis `j`, choose its matched latent `i` from the one-to-one axis matching.
+   - Let `a_i(x)` be the scalar activation for latent `i`.
+   - Define:
+     - `hat_c_j(x) = a_i(x) * S_signed[i, j]`
+     - This corrects for cases where the decoder column is aligned to \(-u_j\) rather than \(+u_j\).
+   - Record the sign correction factor per axis in `axis_alignment.json`.
+
+3. Predicted coefficients for non-negative models (axis aggregation mode):
+   - For each axis `j`, use `(i_pos, i_neg)` from `axis_alignment.json` when available.
+   - Compute:
+     - `hat_c_j(x) = a_{i_pos}(x) * S_signed[i_pos, j] + a_{i_neg}(x) * S_signed[i_neg, j]`
+   - If only one of `i_pos` or `i_neg` is available, treat the missing side as zero.
+   - This credits baselines that allocate separate atoms to \(+u_j\) and \(-u_j\).
+
+4. Optional projection-based validation (debug mode):
+   - Compute `x_hat = model(x)` and validate that projecting `x_hat` onto `u_j` correlates with `hat_c_j(x)`; record diagnostics to detect implementation errors.
 
 Calibration factors:
-- For each matched pair `(i, j)`:
-  - \(\gamma_+\) is the least-squares scalar minimizing \(\mathbb{E}[(\gamma_+ \hat{c}_i(x) - c_j(x))^2 \mid c_j(x) > 0]\).
-  - \(\gamma_-\) is the least-squares scalar minimizing \(\mathbb{E}[(\gamma_- \hat{c}_i(x) - c_j(x))^2 \mid c_j(x) < 0]\).
-- The implementation computes:
-
-```python
-gamma_plus = (c_true_pos * c_pred_pos).sum() / (c_pred_pos.pow(2).sum() + eps)
-gamma_minus = (c_true_neg * c_pred_neg).sum() / (c_pred_neg.pow(2).sum() + eps)
-```
+For each axis `j`:
+1. Split samples into regimes using `c_true[:, j]`:
+   - positive regime: `c_true > 0`
+   - negative regime: `c_true < 0`
+2. For each regime, if `count < min_regime_samples`, set \(\gamma\) and regime metrics to `null`.
+3. Otherwise compute closed-form least squares:
+   - `gamma = (c_true * c_pred).sum() / (c_pred.pow(2).sum() + eps)`
+4. Compute per-regime robust metrics on the same subset:
+   - `coef_mse = mean((c_pred - c_true)^2)`
+   - `pearson_r` between `c_pred` and `c_true`
+   - `r2` (explained variance) with an `eps` guard for near-constant targets
 
 Aggregate metrics:
 - For each model:
-  - Per-pair \(\gamma_+\), \(\gamma_-\), and derived metrics:
+  - Per-axis \(\gamma_+\), \(\gamma_-\), and derived metrics:
     - `gamma_diff = gamma_plus - gamma_minus`
     - `rel_error_plus = |gamma_plus - 1|`
     - `rel_error_minus = |gamma_minus - 1|`
   - Global summary:
     - Mean and standard deviation over matched pairs.
     - Percentiles (e.g., 25th, 50th, 75th) of `rel_error_plus` and `rel_error_minus`.
+    - Mean and standard deviation over axes for `coef_mse_pos/neg`, `pearson_r_pos/neg`, and `r2_pos/neg`.
 
 ### Plotting and Reporting Component
 
@@ -212,7 +272,6 @@ Module: `sgnsae.experiments.polarity_dial.plotting`
 
 Library:
 - Use `matplotlib` for all plots.
-- Optionally integrate `seaborn` later for more polished aesthetics, but the design assumes `matplotlib` as the core dependency.
 
 General style:
 - Background: white.
@@ -280,6 +339,18 @@ Plots to produce:
      - Total loss: dark blue.
      - Reconstruction loss: light blue or orange.
 
+6. Sparsity-fidelity trade-off curves (multi-model, sweep):
+   - Figure: `mse_vs_l0_tradeoff.png`
+   - For each model variant, plot points from a `sparsity_coeff_grid` sweep:
+     - x-axis: average \(L_0\) on test
+     - y-axis: test reconstruction MSE
+   - Annotate points by sparsity coefficient or include a legend mapping to \(\lambda\).
+
+7. Asymmetry sweep plots (multi-model, sweep):
+   - Figure: `asymmetry_sweep_calibration.png`
+   - Plot a calibration error summary (e.g., mean `rel_error_plus` and `rel_error_minus`) as a function of:
+     - `p_plus` (and optionally separate panels for `exponential_lambda` or `lognormal_sigma`).
+
 All plots should:
 - Include titles indicating the model and variant (e.g., `"Sign-Aware Gated SAE: Calibration"`).
 - Label axes with units where applicable.
@@ -303,7 +374,12 @@ Structure:
 1. Configuration:
    - File: `config.json`
    - Contents:
-     - Serialized `PolarityDialExperimentConfig`, including nested `data` and `models` sections.
+     - Serialized `PolarityDialExperimentConfig`, including nested `data`, `models`, `evaluation`, and optional `sweeps` sections.
+
+2. Environment metadata:
+   - File: `environment.json`
+   - Contents:
+     - Python version, OS, torch version, CUDA availability, and key library versions (numpy, scipy, matplotlib, einops).
 
 2. Data summary:
    - Directory: `data/`
@@ -321,33 +397,57 @@ Structure:
      - `model_config.json`: serialized `PolarityDialModelVariantConfig`.
      - `model.pt`: serialized model (`torch.save`).
      - `training_metrics.json`:
+       - `model_seed`: int (derived seed used for this model variant)
        - `epoch`: list[int]
        - `loss_total`: list[float]
        - `loss_reconstruction`: list[float]
        - `loss_sparsity`: list[float]
        - Any additional SAE-specific metrics (e.g., mean active latents).
-     - `alignment.json`:
-       - `matched_pairs`: list of objects with:
-         - `latent_index: int`
-         - `feature_index: int`
-         - `cosine_similarity: float`
-       - `unmatched_latents`: list of latent indices not matched (if any).
-     - `calibration.json`:
-       - `per_pair`: list of objects with:
-         - `latent_index: int`
-         - `feature_index: int`
-         - `gamma_plus: float`
-         - `gamma_minus: float`
-         - `rel_error_plus: float`
-         - `rel_error_minus: float`
-       - `summary`:
-         - `mean_gamma_plus: float`
-         - `mean_gamma_minus: float`
-         - `mean_rel_error_plus: float`
-         - `mean_rel_error_minus: float`
-         - `std_rel_error_plus: float`
-         - `std_rel_error_minus: float`
-         - `num_pairs: int`
+    - `alignment.json`:
+      - `alignment_mode`: e.g., `"axis_aware_abs_cos"`
+      - `pairs`: list of `{latent_index, feature_index, signed_cosine}`
+    - `axis_alignment.json`:
+      - `axes`: list of objects with:
+        - `feature_index: int`
+        - `latent_pos: int | null`
+        - `latent_neg: int | null`
+        - `signed_cos_pos: float | null`
+        - `signed_cos_neg: float | null`
+        - `axis_cos_pos: float | null`
+        - `axis_cos_neg: float | null`
+      - `eval_decoder_normalized: bool`
+      - `min_axis_abs_cos`: float (threshold used to accept a latent for an axis side)
+      - `coverage_summary`: object with counts/fractions for pos/neg/both/neither coverage
+    - `calibration.json`:
+      - `per_pair`: list of objects with:
+        - `latent_index: int`
+        - `feature_index: int`
+        - `gamma_plus: float`
+        - `gamma_minus: float`
+        - `rel_error_plus: float`
+        - `rel_error_minus: float`
+        - `n_pos: int`
+        - `n_neg: int`
+        - `coef_mse_pos: float | null`
+        - `coef_mse_neg: float | null`
+        - `pearson_r_pos: float | null`
+        - `pearson_r_neg: float | null`
+        - `r2_pos: float | null`
+        - `r2_neg: float | null`
+      - `summary`:
+        - `mean_gamma_plus: float`
+        - `mean_gamma_minus: float`
+        - `mean_rel_error_plus: float`
+        - `mean_rel_error_minus: float`
+        - `std_rel_error_plus: float`
+        - `std_rel_error_minus: float`
+        - `num_pairs: int`
+        - `mean_coef_mse_pos: float | null`
+        - `mean_coef_mse_neg: float | null`
+        - `mean_pearson_r_pos: float | null`
+        - `mean_pearson_r_neg: float | null`
+        - `mean_r2_pos: float | null`
+        - `mean_r2_neg: float | null`
      - `plots/`:
        - `calibration_scatter_[model_name].png`
        - `gamma_hist_[model_name].png`
@@ -364,6 +464,12 @@ Structure:
        - Differences relative to a chosen baseline (e.g., ReLU SAE).
    - File: `gamma_diff_bar_comparison.png`
      - Bar chart as described above.
+   - File: `mse_vs_l0_tradeoff.json` (if sparsity sweep enabled)
+     - Contains per-model sweep points (sparsity coeff, test MSE, test \(L_0\)).
+   - File: `mse_vs_l0_tradeoff.png` (if sparsity sweep enabled)
+   - File: `asymmetry_sweep_summary.json` (if asymmetry sweep enabled)
+     - Contains per-model results keyed by asymmetry parameters.
+   - File: `asymmetry_sweep_calibration.png` (if asymmetry sweep enabled)
 
 All JSON files use snake_case keys for consistency with the Python config dataclasses.
 
@@ -372,6 +478,9 @@ All JSON files use snake_case keys for consistency with the Python config datacl
 - Configuration validation:
   - Invalid or inconsistent configurations (e.g., negative `activation_prob`, `num_features > input_dim`) should raise `ValueError` with clear messages before any computation.
   - Missing required config fields should be caught when parsing the configuration file.
+
+- Dependency validation:
+  - Fail fast if required optional dependencies are missing (e.g., `einops.einsum` if used), with a clear error message pointing to installing `requirements.txt`.
 - Data generation:
   - If `num_train`, `num_val`, or `num_test` is zero or negative, raise `ValueError`.
   - If `noise_std < 0`, raise `ValueError`.
@@ -409,5 +518,15 @@ Tests will be implemented using `pytest` in the `tests/` package, focusing on:
    - Ensure invalid configurations raise the expected exceptions with informative messages.
    - Ensure that evaluation gracefully handles regimes with too few samples by emitting `null` for missing gamma values.
 
-This testing strategy is designed to give high confidence that the Protocol A implementation correctly generates data, trains models, computes calibration metrics, and writes outputs in the expected structure.
+5. Reproducibility tests (order independence):
+   - Run the same tiny config twice with the model list permuted.
+   - Assert per-model summaries match within tolerances.
 
+6. Scale-invariance tests for SignedSoftThreshold baseline:
+   - Scale the raw decoder weights by a constant factor.
+   - Assert reconstructions and calibration metrics are unchanged (within tolerance) when using `D_norm`.
+
+7. Environment artifact tests:
+   - Assert `environment.json` exists and contains expected keys.
+
+This testing strategy is designed to give high confidence that the Protocol A implementation correctly generates data, trains models, computes calibration metrics, and writes outputs in the expected structure.
