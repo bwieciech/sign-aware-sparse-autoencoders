@@ -19,7 +19,7 @@
   - Ensure the script prints the final `<run_dir>` path at completion.
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 8.1_
 
-- [ ] 3. Implement toy 2D data generation (paired antipodal features)
+- [x] 3. Implement toy 2D data generation (paired antipodal features)
   - Create `sgnsae/experiments/toy_model_geometry_validation/data.py`.
   - Implement `generate_toy2d_dataset(config, device)` returning:
     - `feature_directions` (2k,2),
