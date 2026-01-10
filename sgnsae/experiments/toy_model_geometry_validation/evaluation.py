@@ -1,7 +1,9 @@
 import json
 import os
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -122,6 +124,7 @@ def _evaluate_pair_consolidation(
     consolidated_pairs: List[Dict[str, Any]] = []
     evaluable_count = 0
     consolidated_count = 0
+    eps = 1e-8
 
     for pair_index in range(num_pairs):
         eligible_mask = pair_active_mask[:, pair_index].to(dtype=torch.bool)
@@ -164,9 +167,26 @@ def _evaluate_pair_consolidation(
                 latents[:, latent_index][eligible_mask]
                 * orientation_sign[latent_index, pair_index]
             )
-            activation_corr = _pearsonr(oriented_latents, eligible_coeffs)
+            # Spec: correlation must be computed only on samples where |c_j(x)| > 0.
+            # (eligible_coeffs already conditions on pair_active_mask for this pair)
+            corr_mask = eligible_coeffs != 0.0
+            activation_corr = _pearsonr(
+                oriented_latents[corr_mask], eligible_coeffs[corr_mask]
+            )
             if activation_corr is None or activation_corr < float(
                 evaluation_config.min_activation_corr
+            ):
+                continue
+
+            pos_sign_agreement = float(
+                (oriented_latents[positive_mask] > eps).float().mean().item()
+            )
+            neg_sign_agreement = float(
+                (oriented_latents[negative_mask] < -eps).float().mean().item()
+            )
+            if (
+                pos_sign_agreement < float(evaluation_config.min_sign_agreement)
+                or neg_sign_agreement < float(evaluation_config.min_sign_agreement)
             ):
                 continue
 
@@ -184,6 +204,8 @@ def _evaluate_pair_consolidation(
                 "latent_index": int(latent_index),
                 "axis_abs_cos": score[1],
                 "activation_corr": score[0],
+                "positive_sign_agreement": pos_sign_agreement,
+                "negative_sign_agreement": neg_sign_agreement,
                 "positive_regime_samples": pos_count,
                 "negative_regime_samples": neg_count,
                 "mean_activation_positive_regime": mean_pos,
@@ -197,6 +219,9 @@ def _evaluate_pair_consolidation(
             consolidated_count += 1
             consolidated_pairs.append(best_candidate)
 
+    pair_consolidation_rate = (
+        consolidated_count / float(num_pairs) if num_pairs else 0.0
+    )
     rate_over_evaluable = (
         None if evaluable_count == 0 else consolidated_count / float(evaluable_count)
     )
@@ -205,7 +230,10 @@ def _evaluate_pair_consolidation(
         "num_pairs_total": num_pairs,
         "num_pairs_evaluable": evaluable_count,
         "num_pairs_consolidated": consolidated_count,
+        "pair_consolidation_rate": pair_consolidation_rate,
         "pair_consolidation_rate_over_evaluable_pairs": rate_over_evaluable,
+        # Alias to satisfy requirements.md naming.
+        "rate_over_evaluable_pairs": rate_over_evaluable,
         "evaluable_pair_fraction": evaluable_fraction,
     }
     return summary, evaluability, consolidated_pairs
@@ -252,6 +280,9 @@ def evaluate_toy2d_model(
             "Latents and coeffs_test must have matching sample counts; "
             f"received latents={int(latents.shape[0])} coeffs_test={int(coeffs_test.shape[0])}."
         )
+    latent_active_fraction = (
+        (latents.abs() > 1e-8).float().mean(dim=0).detach().cpu().numpy()
+    )
 
     decoder_directions = extract_decoder_directions(model)
     pair_axis_unit = pair_axis_directions.to(dtype=torch.float32)
@@ -259,9 +290,6 @@ def evaluate_toy2d_model(
     dot_products = decoder_directions @ pair_axis_unit.transpose(0, 1)
 
     alignment_summary = _best_aligned_latent_by_pair(dot_products)
-    histogram_selection = (
-        _select_histogram_latent(dot_products, pair_index=0) if sign_aware else None
-    )
     consolidation_summary, pair_evaluability, consolidated_pairs = (
         _evaluate_pair_consolidation(
             latents=latents,
@@ -271,6 +299,50 @@ def evaluate_toy2d_model(
             evaluation_config=evaluation_config,
         )
     )
+    histogram_selection: Optional[Dict[str, Any]] = None
+    if sign_aware:
+        if consolidated_pairs:
+            best = max(
+                consolidated_pairs,
+                key=lambda candidate: (
+                    candidate.get("activation_corr", -math.inf),
+                    candidate.get("axis_abs_cos", -math.inf),
+                ),
+            )
+            latent_index = int(best["latent_index"])
+            histogram_selection = {
+                "pair_index": int(best["pair_index"]),
+                "latent_index": latent_index,
+                "axis_abs_cos": float(best["axis_abs_cos"]),
+                "orientation_sign": int(
+                    1 if float(dot_products[latent_index, int(best["pair_index"])]) >= 0.0 else -1
+                ),
+                "latent_active_fraction": float(latent_active_fraction[latent_index]),
+                "selection_reason": "best_consolidated_pair",
+            }
+        else:
+            pair_index = 0
+            abs_cos = dot_products[:, pair_index].abs().detach().cpu().numpy()
+            aligned_mask = abs_cos >= float(evaluation_config.min_axis_abs_cos)
+            if bool(np.any(aligned_mask)):
+                candidates = np.where(aligned_mask)[0]
+                best_latent_index = int(
+                    candidates[int(np.argmax(latent_active_fraction[candidates]))]
+                )
+                selection_reason = "most_active_aligned_latent"
+            else:
+                best_latent_index = int(abs_cos.argmax())
+                selection_reason = "best_aligned_latent_no_candidates"
+            histogram_selection = {
+                "pair_index": int(pair_index),
+                "latent_index": best_latent_index,
+                "axis_abs_cos": float(abs_cos[best_latent_index]),
+                "orientation_sign": int(
+                    1 if float(dot_products[best_latent_index, pair_index]) >= 0.0 else -1
+                ),
+                "latent_active_fraction": float(latent_active_fraction[best_latent_index]),
+                "selection_reason": selection_reason,
+            }
 
     return {
         "model_name": model_name,
@@ -284,6 +356,7 @@ def evaluate_toy2d_model(
         "thresholds": {
             "min_axis_abs_cos": float(evaluation_config.min_axis_abs_cos),
             "min_activation_corr": float(evaluation_config.min_activation_corr),
+            "min_sign_agreement": float(evaluation_config.min_sign_agreement),
             "min_regime_samples": int(evaluation_config.min_regime_samples),
         },
     }

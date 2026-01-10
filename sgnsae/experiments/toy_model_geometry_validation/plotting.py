@@ -30,10 +30,32 @@ def plot_unit_circle(
     model_name: str,
     feature_directions: Tensor,
     model_dir: str,
+    *,
+    x_test: Optional[Tensor] = None,
+    min_active_fraction: Optional[float] = 1e-3,
 ) -> str:
     plt = _import_matplotlib()
 
     decoder_directions = extract_decoder_directions(model)
+    decoder_label = "Decoder"
+    if x_test is not None and min_active_fraction is not None:
+        model.eval()
+        with torch.no_grad():
+            output = model(x_test.to(device=next(model.parameters()).device))
+        if "latents" not in output:
+            raise ValueError("Model output is missing required key 'latents'.")
+        latents_tensor = output["latents"]
+        if latents_tensor.ndim != 3 or int(latents_tensor.shape[0]) != 1:
+            raise ValueError(
+                "Model output 'latents' must have shape (1, batch, d_hidden); "
+                f"received {tuple(int(dim) for dim in latents_tensor.shape)}."
+            )
+        latents = latents_tensor[0].detach().cpu().to(dtype=torch.float32)
+        active_fraction = (latents.abs() > 1e-8).float().mean(dim=0)
+        active_mask = active_fraction >= float(min_active_fraction)
+        if bool(active_mask.any().item()):
+            decoder_directions = decoder_directions[active_mask]
+            decoder_label = f"Decoder (active ≥ {float(min_active_fraction):g})"
     feature_unit = feature_directions.detach().cpu().to(dtype=torch.float32)
     feature_unit = feature_unit / (feature_unit.norm(dim=1, keepdim=True) + 1e-8)
 
@@ -66,7 +88,7 @@ def plot_unit_circle(
         c="#ff7f0e",
         s=28,
         alpha=0.9,
-        label="Decoder",
+        label=decoder_label,
     )
     plt.title(f"Unit Circle Decoder Geometry - {model_name}")
     plt.xlabel("x")

@@ -83,6 +83,9 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             )
             self.assertEqual(len(sweep_payload["points"]), 2)
             self.assertIn("relu_sae", sweep_payload["points"][0]["per_model"])
+            first_metrics = sweep_payload["points"][0]["per_model"]["relu_sae"]
+            self.assertIn("pair_consolidation_rate", first_metrics)
+            self.assertIn("rate_over_evaluable_pairs", first_metrics)
 
             for correlation_value in (-1.0, 0.0):
                 leaf_dir = os.path.join(
@@ -231,9 +234,11 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             self.assertEqual(evaluation["num_pairs_total"], 2)
             self.assertEqual(evaluation["num_pairs_evaluable"], 0)
             self.assertEqual(evaluation["num_pairs_consolidated"], 0)
+            self.assertEqual(evaluation["pair_consolidation_rate"], 0.0)
             self.assertIsNone(
                 evaluation["pair_consolidation_rate_over_evaluable_pairs"]
             )
+            self.assertIsNone(evaluation["rate_over_evaluable_pairs"])
             self.assertIsNone(evaluation["histogram_latent"])
 
     def test_run_experiment_respects_output_dir_when_already_parent(self) -> None:

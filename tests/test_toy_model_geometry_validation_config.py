@@ -433,6 +433,34 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
                 **{**base_kwargs, "resample_latents_epochs": 0.0}
             )
 
+    def test_model_variant_config_rejects_negative_sparsity_warmup_epochs(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = self._build_base_model_config()
+
+        # when / then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DModelVariantConfig(
+                **{**base_kwargs, "sparsity_coeff_warmup_epochs": -1}
+            )
+
+    def test_model_variant_config_rejects_sparsity_warmup_longer_than_training(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = self._build_base_model_config()
+
+        # when / then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DModelVariantConfig(
+                **{
+                    **base_kwargs,
+                    "num_epochs": 2,
+                    "sparsity_coeff_warmup_epochs": 3,
+                }
+            )
+
     def test_model_variant_config_rejects_invalid_adam_betas(self) -> None:
         # given
         base_kwargs = self._build_base_model_config()
@@ -453,6 +481,8 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
             _ = config_module.Toy2DEvaluationConfig(min_axis_abs_cos=1.1)
         with self.assertRaises(ValueError):
             _ = config_module.Toy2DEvaluationConfig(min_activation_corr=-0.1)
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DEvaluationConfig(min_sign_agreement=1.1)
 
     def test_evaluation_config_rejects_non_positive_counts(self) -> None:
         # given / when / then

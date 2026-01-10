@@ -187,6 +187,7 @@ def _run_single_model(
         model_name=model_config.name,
         feature_directions=data["feature_directions"],
         model_dir=model_dir,
+        x_test=data.get("x_test"),
     )
     if bool(model_config.sign_aware) and evaluation.get("histogram_latent") is not None:
         histogram_info = evaluation["histogram_latent"]
@@ -207,9 +208,11 @@ def _run_single_model(
 
     training_summary.update(
         {
+            "pair_consolidation_rate": evaluation.get("pair_consolidation_rate"),
             "pair_consolidation_rate_over_evaluable_pairs": evaluation.get(
                 "pair_consolidation_rate_over_evaluable_pairs"
             ),
+            "rate_over_evaluable_pairs": evaluation.get("rate_over_evaluable_pairs"),
             "evaluable_pair_fraction": evaluation.get("evaluable_pair_fraction"),
             "num_pairs_consolidated": evaluation.get("num_pairs_consolidated"),
             "num_pairs_evaluable": evaluation.get("num_pairs_evaluable"),
@@ -219,9 +222,11 @@ def _run_single_model(
         "model_dir": model_dir,
         "training_summary": training_summary,
         "evaluation_summary": {
+            "pair_consolidation_rate": evaluation.get("pair_consolidation_rate"),
             "pair_consolidation_rate_over_evaluable_pairs": evaluation.get(
                 "pair_consolidation_rate_over_evaluable_pairs"
             ),
+            "rate_over_evaluable_pairs": evaluation.get("rate_over_evaluable_pairs"),
             "evaluable_pair_fraction": evaluation.get("evaluable_pair_fraction"),
             "num_pairs_consolidated": evaluation.get("num_pairs_consolidated"),
             "num_pairs_evaluable": evaluation.get("num_pairs_evaluable"),
@@ -316,9 +321,11 @@ def _run_sweep_experiment(
         for model_name in model_names:
             model_summary = leaf_summary["per_model"][model_name]
             per_model_metrics[model_name] = {
+                "pair_consolidation_rate": model_summary.get("pair_consolidation_rate"),
                 "pair_consolidation_rate_over_evaluable_pairs": model_summary.get(
                     "pair_consolidation_rate_over_evaluable_pairs"
                 ),
+                "rate_over_evaluable_pairs": model_summary.get("rate_over_evaluable_pairs"),
                 "evaluable_pair_fraction": model_summary.get("evaluable_pair_fraction"),
                 "num_pairs_evaluable": model_summary.get("num_pairs_evaluable"),
                 "num_pairs_consolidated": model_summary.get("num_pairs_consolidated"),

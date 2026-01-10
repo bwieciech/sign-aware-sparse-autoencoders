@@ -93,8 +93,13 @@ class TestToyModelGeometryValidationConsolidation(unittest.TestCase):
         self.assertEqual(evaluation["num_pairs_total"], num_pairs)
         self.assertEqual(evaluation["num_pairs_evaluable"], num_pairs)
         self.assertEqual(evaluation["num_pairs_consolidated"], num_pairs)
+        self.assertAlmostEqual(evaluation["pair_consolidation_rate"], 1.0)
         self.assertAlmostEqual(
             evaluation["pair_consolidation_rate_over_evaluable_pairs"], 1.0
+        )
+        self.assertEqual(
+            evaluation["rate_over_evaluable_pairs"],
+            evaluation["pair_consolidation_rate_over_evaluable_pairs"],
         )
         self.assertAlmostEqual(evaluation["evaluable_pair_fraction"], 1.0)
         self.assertIsNotNone(evaluation["histogram_latent"])
@@ -161,8 +166,13 @@ class TestToyModelGeometryValidationConsolidation(unittest.TestCase):
         self.assertEqual(evaluation["num_pairs_total"], num_pairs)
         self.assertEqual(evaluation["num_pairs_evaluable"], num_pairs)
         self.assertEqual(evaluation["num_pairs_consolidated"], 0)
+        self.assertAlmostEqual(evaluation["pair_consolidation_rate"], 0.0)
         self.assertAlmostEqual(
             evaluation["pair_consolidation_rate_over_evaluable_pairs"], 0.0
+        )
+        self.assertEqual(
+            evaluation["rate_over_evaluable_pairs"],
+            evaluation["pair_consolidation_rate_over_evaluable_pairs"],
         )
         self.assertIsNone(evaluation["histogram_latent"])
 

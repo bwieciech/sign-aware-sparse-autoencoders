@@ -169,6 +169,7 @@ class Toy2DModelVariantConfig:
     adam_betas: Tuple[float, float]
     symmetric_magnitude: bool = False
     resample_latents_epochs: float = 1.0
+    sparsity_coeff_warmup_epochs: int = 0
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -195,6 +196,16 @@ class Toy2DModelVariantConfig:
             raise ValueError(
                 f"resample_latents_epochs must be positive; received {self.resample_latents_epochs}."
             )
+        if self.sparsity_coeff_warmup_epochs < 0:
+            raise ValueError(
+                "sparsity_coeff_warmup_epochs must be >= 0; "
+                f"received {self.sparsity_coeff_warmup_epochs}."
+            )
+        if self.sparsity_coeff_warmup_epochs > self.num_epochs:
+            raise ValueError(
+                "sparsity_coeff_warmup_epochs must be <= num_epochs; "
+                f"received warmup={self.sparsity_coeff_warmup_epochs}, num_epochs={self.num_epochs}."
+            )
         _validate_adam_betas(self.adam_betas)
 
 
@@ -202,12 +213,14 @@ class Toy2DModelVariantConfig:
 class Toy2DEvaluationConfig:
     min_axis_abs_cos: float = 0.9
     min_activation_corr: float = 0.8
+    min_sign_agreement: float = 0.9
     min_regime_samples: int = 100
     hist_num_bins: int = 80
 
     def __post_init__(self) -> None:
         _validate_closed_unit_interval(self.min_axis_abs_cos, "min_axis_abs_cos")
         _validate_closed_unit_interval(self.min_activation_corr, "min_activation_corr")
+        _validate_closed_unit_interval(self.min_sign_agreement, "min_sign_agreement")
         _validate_positive_int(self.min_regime_samples, "min_regime_samples")
         _validate_positive_int(self.hist_num_bins, "hist_num_bins")
 

@@ -16,6 +16,17 @@ from sgnsae.experiments.toy_model_geometry_validation.config import (
 from sgnsae.models import GatedSAE, SAE
 
 
+def _effective_sparsity_coeff(
+    base_coeff: float,
+    epoch_index: int,
+    warmup_epochs: int,
+) -> float:
+    if warmup_epochs <= 0:
+        return float(base_coeff)
+    t = min(1.0, float(epoch_index + 1) / float(warmup_epochs))
+    return float(base_coeff) * t
+
+
 def _instantiate_model(
     model_config: Toy2DModelVariantConfig,
     d_in: int,
@@ -115,9 +126,6 @@ def run_training_for_variant(
     optimizer = torch.optim.Adam(
         model.parameters(), lr=model_config.learning_rate, betas=model_config.adam_betas
     )
-    sparsity_coeffs = torch.tensor(
-        [model_config.sparsity_coeff], device=device, dtype=torch.float32
-    )
     inactive_latents_count = torch.zeros(1, model_config.d_hidden, device=device)
 
     training_metrics: Dict[str, Any] = {
@@ -126,11 +134,20 @@ def run_training_for_variant(
         "loss_reconstruction": [],
         "loss_sparsity": [],
         "mean_active_latents": [],
+        "sparsity_coeff_effective": [],
     }
     terminated_early = False
 
     for epoch in range(model_config.num_epochs):
         model.train()
+        eff_sparsity_coeff = _effective_sparsity_coeff(
+            model_config.sparsity_coeff,
+            epoch_index=epoch,
+            warmup_epochs=model_config.sparsity_coeff_warmup_epochs,
+        )
+        sparsity_coeffs = torch.tensor(
+            [eff_sparsity_coeff], device=device, dtype=torch.float32
+        )
         epoch_totals = defaultdict(float)
         epoch_active_latents_total = 0.0
         for step, (batch,) in enumerate(dataloader):
@@ -204,6 +221,7 @@ def run_training_for_variant(
         )
         training_metrics["loss_sparsity"].append(epoch_mean_losses["sparsity_losses"])
         training_metrics["mean_active_latents"].append(epoch_mean_active_latents)
+        training_metrics["sparsity_coeff_effective"].append(eff_sparsity_coeff)
         if "aux_loss" in epoch_mean_losses:
             training_metrics.setdefault("loss_aux", []).append(
                 epoch_mean_losses["aux_loss"]

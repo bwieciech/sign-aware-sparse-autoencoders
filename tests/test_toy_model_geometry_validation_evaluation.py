@@ -54,6 +54,16 @@ class _NoDecoderModel(torch.nn.Module):
         return {"latents": x.unsqueeze(0)}
 
 
+class _FixedLatentsModel(torch.nn.Module):
+    def __init__(self, decoder_directions: torch.Tensor, latents: torch.Tensor):
+        super().__init__()
+        self.W_dec = torch.nn.Parameter(decoder_directions.unsqueeze(0))
+        self._latents = latents.to(dtype=torch.float32)
+
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+        return {"latents": self._latents.unsqueeze(0)}
+
+
 class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
     def _build_data(
         self,
@@ -164,6 +174,18 @@ class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
         with self.assertRaises(ValueError):
             _ = eval_module._select_histogram_latent(dot_products, pair_index=2)
 
+    def test_select_histogram_latent_returns_best_aligned_latent(self) -> None:
+        # given
+        dot_products = torch.tensor([[0.1, -0.2], [-0.9, 0.3], [0.4, -0.8]])
+
+        # when
+        output = eval_module._select_histogram_latent(dot_products, pair_index=0)
+
+        # then
+        self.assertEqual(output["pair_index"], 0)
+        self.assertEqual(output["latent_index"], 1)
+        self.assertAlmostEqual(output["axis_abs_cos"], 0.9)
+
     def test_evaluate_toy2d_model_computes_consolidation_for_perfect_signed_model(
         self,
     ) -> None:
@@ -201,8 +223,13 @@ class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
         self.assertEqual(evaluation["num_pairs_total"], 1)
         self.assertEqual(evaluation["num_pairs_evaluable"], 1)
         self.assertEqual(evaluation["num_pairs_consolidated"], 1)
+        self.assertEqual(evaluation["pair_consolidation_rate"], 1.0)
         self.assertAlmostEqual(
             evaluation["pair_consolidation_rate_over_evaluable_pairs"], 1.0
+        )
+        self.assertEqual(
+            evaluation["rate_over_evaluable_pairs"],
+            evaluation["pair_consolidation_rate_over_evaluable_pairs"],
         )
         self.assertAlmostEqual(evaluation["evaluable_pair_fraction"], 1.0)
         self.assertEqual(evaluation["histogram_latent"]["latent_index"], 0)
@@ -214,6 +241,51 @@ class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             eval_module.persist_evaluation(evaluation=evaluation, model_dir=tmpdir)
             self.assertTrue(os.path.isfile(os.path.join(tmpdir, "evaluation.json")))
+
+    def test_evaluate_toy2d_model_rejects_latents_with_wrong_mean_signs_after_sign_agreement(
+        self,
+    ) -> None:
+        # given
+        signed_coeffs = torch.tensor(
+            list(range(-1, -11, -1)) + list(range(1, 11)),
+            dtype=torch.float32,
+        )
+        data = self._build_data(
+            signed_coeffs=signed_coeffs,
+            pair_axis_direction=torch.tensor([1.0, 0.0]),
+        )
+        latents = torch.tensor(
+            [0.1]
+            + [-0.01] * 9
+            + [-0.1]
+            + [0.01] * 9,
+            dtype=torch.float32,
+        ).unsqueeze(1)
+        model = _FixedLatentsModel(
+            decoder_directions=torch.tensor([[1.0], [0.0]]),
+            latents=latents,
+        )
+        evaluation_config = Toy2DEvaluationConfig(
+            min_axis_abs_cos=0.9,
+            min_activation_corr=0.0,
+            min_sign_agreement=0.89,
+            min_regime_samples=1,
+            hist_num_bins=10,
+        )
+
+        # when
+        evaluation = eval_module.evaluate_toy2d_model(
+            model=model,
+            data=data,
+            evaluation_config=evaluation_config,
+            model_name="mean_flip",
+            sign_aware=True,
+            device="cpu",
+        )
+
+        # then
+        self.assertEqual(evaluation["num_pairs_evaluable"], 1)
+        self.assertEqual(evaluation["num_pairs_consolidated"], 0)
 
     def test_evaluate_toy2d_model_returns_zero_consolidation_for_non_negative_model(
         self,
@@ -248,8 +320,13 @@ class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
         # then
         self.assertEqual(evaluation["num_pairs_evaluable"], 1)
         self.assertEqual(evaluation["num_pairs_consolidated"], 0)
+        self.assertEqual(evaluation["pair_consolidation_rate"], 0.0)
         self.assertEqual(
             evaluation["pair_consolidation_rate_over_evaluable_pairs"], 0.0
+        )
+        self.assertEqual(
+            evaluation["rate_over_evaluable_pairs"],
+            evaluation["pair_consolidation_rate_over_evaluable_pairs"],
         )
         self.assertIsNone(evaluation["histogram_latent"])
 
