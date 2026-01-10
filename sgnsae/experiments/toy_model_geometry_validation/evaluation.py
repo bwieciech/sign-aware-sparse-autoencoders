@@ -385,6 +385,10 @@ def evaluate_toy2d_model(
     )
     histogram_selection: Optional[Dict[str, Any]] = None
     if sign_aware:
+        # Choose a latent for visualization.
+        # Priority:
+        # 1) If any pair is consolidated, pick the best consolidated pair (as before).
+        # 2) Otherwise, fall back to the best candidate for pair 0 (reproducible, and aligned with diagnostics).
         if consolidated_pairs:
             best = max(
                 consolidated_pairs,
@@ -405,28 +409,24 @@ def evaluate_toy2d_model(
                 "selection_reason": "best_consolidated_pair",
             }
         else:
-            pair_index = 0
-            abs_cos = dot_products[:, pair_index].abs().detach().cpu().numpy()
-            aligned_mask = abs_cos >= float(evaluation_config.min_axis_abs_cos)
-            if bool(np.any(aligned_mask)):
-                candidates = np.where(aligned_mask)[0]
-                best_latent_index = int(
-                    candidates[int(np.argmax(latent_active_fraction[candidates]))]
+            best_candidates = consolidation_summary.get("best_candidates", [])
+            if best_candidates and len(best_candidates) > 0:
+                histogram_selection = dict(best_candidates[0])
+                histogram_selection["selection_reason"] = "best_candidate_pair0"
+                latent_index = int(histogram_selection["latent_index"])
+                histogram_selection["latent_active_fraction"] = float(
+                    latent_active_fraction[latent_index]
                 )
-                selection_reason = "most_active_aligned_latent"
             else:
-                best_latent_index = int(abs_cos.argmax())
-                selection_reason = "best_aligned_latent_no_candidates"
-            histogram_selection = {
-                "pair_index": int(pair_index),
-                "latent_index": best_latent_index,
-                "axis_abs_cos": float(abs_cos[best_latent_index]),
-                "orientation_sign": int(
-                    1 if float(dot_products[best_latent_index, pair_index]) >= 0.0 else -1
-                ),
-                "latent_active_fraction": float(latent_active_fraction[best_latent_index]),
-                "selection_reason": selection_reason,
-            }
+                histogram_selection = _select_histogram_latent(dot_products, pair_index=0)
+                latent_index = int(histogram_selection["latent_index"])
+                histogram_selection["orientation_sign"] = int(
+                    histogram_selection["orientation_sign"]
+                )
+                histogram_selection["latent_active_fraction"] = float(
+                    latent_active_fraction[latent_index]
+                )
+                histogram_selection["selection_reason"] = "best_aligned_pair0"
 
     return {
         "model_name": model_name,

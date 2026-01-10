@@ -78,13 +78,20 @@ def _sample_pair_active_mask(
             "pair_axis_active_prob must be within [0, 1]; "
             f"received {config.pair_axis_active_prob}."
         )
-    uniforms = torch.rand(
-        (num_samples, config.num_pairs),
-        generator=generator,
-        device="cpu",
-        dtype=torch.float32,
-    )
-    return uniforms < float(config.pair_axis_active_prob)
+    rho = float(config.pair_axis_active_prob)
+    k = int(config.num_pairs)
+    if config.active_pairs_per_sample is None:
+        g = torch.bernoulli(torch.full((num_samples, k), rho, device="cpu"))
+        return g.to(dtype=torch.bool)
+    n = int(config.active_pairs_per_sample)
+    if not (0 <= n <= k):
+        raise ValueError(f"active_pairs_per_sample must be in [0,k]; got {n} for k={k}.")
+    g = torch.zeros((num_samples, k), device="cpu", dtype=torch.bool)
+    # Sample exactly n pairs without replacement per sample
+    for i in range(num_samples):
+        idx = torch.randperm(k, device="cpu")[:n]
+        g[i, idx] = True
+    return g
 
 
 def _calculate_within_pair_joint_probabilities(

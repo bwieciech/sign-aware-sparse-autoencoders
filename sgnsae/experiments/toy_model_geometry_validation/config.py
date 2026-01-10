@@ -89,6 +89,7 @@ class Toy2DDataConfig:
     num_pairs: int
     direction_mode: Literal["uniform", "random"] = "uniform"
     pair_axis_active_prob: float = 0.2
+    active_pairs_per_sample: int | None = None
     pair_feature_prob: float = 0.5
     pair_correlation: Optional[float] = -1.0
     pair_correlation_grid: Optional[List[float]] = None

@@ -1,5 +1,6 @@
 import json
 import os
+import warnings
 from hashlib import sha256
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -103,6 +104,25 @@ def _stable_model_seed(base_seed: int, model_name: str) -> int:
 def _format_pair_correlation(value: float) -> str:
     normalized = 0.0 if abs(value) < 1e-12 else float(value)
     return str(normalized)
+
+
+def _warn_if_width_name_mismatch(model_name: str, d_hidden: int, num_pairs: int) -> None:
+    """
+    Protocol C uses naming conventions like *_k and *_2k to communicate intended width.
+    This check prevents accidental mismatches (e.g. num_pairs=8 but d_hidden=64).
+    """
+    expected = None
+    if model_name.endswith("_k"):
+        expected = num_pairs
+    elif model_name.endswith("_2k"):
+        expected = 2 * num_pairs
+    if expected is not None and d_hidden != expected:
+        warnings.warn(
+            f"[toy_model_geometry_validation] Model '{model_name}' implies d_hidden={expected} "
+            f"(num_pairs={num_pairs}), but config has d_hidden={d_hidden}. "
+            "This can invalidate 'k vs 2k' Protocol C comparisons.",
+            stacklevel=2,
+        )
 
 
 def _run_data_generation(
@@ -299,7 +319,13 @@ def _run_leaf_experiment(
     data = _run_data_generation(experiment_config, run_dir)
 
     per_model: Dict[str, Any] = {}
+    num_pairs = experiment_config.data.num_pairs
     for model_config in experiment_config.models:
+        _warn_if_width_name_mismatch(
+            model_config.name,
+            int(model_config.d_hidden),
+            int(num_pairs),
+        )
         per_model[model_config.name] = _run_single_model(
             experiment_config=experiment_config,
             run_dir=run_dir,
