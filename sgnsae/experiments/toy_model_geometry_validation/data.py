@@ -347,6 +347,10 @@ def export_toy2d_dataset(
             data[f"coeffs_{split}"].detach().cpu(),
             os.path.join(data_dir, f"coeffs_{split}.pt"),
         )
+        torch.save(
+            data[f"x_{split}"].detach().cpu(),
+            os.path.join(data_dir, f"x_{split}.pt"),
+        )
 
     preview_payload: Dict[str, Tensor] = {}
     for split in ("train", "val", "test"):

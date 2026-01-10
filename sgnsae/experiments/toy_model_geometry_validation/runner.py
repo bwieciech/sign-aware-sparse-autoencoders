@@ -18,11 +18,14 @@ from sgnsae.experiments.toy_model_geometry_validation.data import (
     set_random_seed,
 )
 from sgnsae.experiments.toy_model_geometry_validation.evaluation import (
+    extract_signed_pair_coefficients,
     evaluate_toy2d_model,
     persist_evaluation,
 )
 from sgnsae.experiments.toy_model_geometry_validation.plotting import (
     plot_bijump_histogram,
+    plot_bijump_histogram_logy,
+    plot_latent_vs_coeff_scatter,
     plot_pair_consolidation_sweep,
     plot_unit_circle,
 )
@@ -191,6 +194,13 @@ def _run_single_model(
     )
     if bool(model_config.sign_aware) and evaluation.get("histogram_latent") is not None:
         histogram_info = evaluation["histogram_latent"]
+        pair_index = int(histogram_info.get("pair_index", 0))
+        orientation_sign = int(histogram_info.get("orientation_sign", 1))
+        axis_abs_cos = (
+            None
+            if histogram_info.get("axis_abs_cos") is None
+            else float(histogram_info["axis_abs_cos"])
+        )
         plot_bijump_histogram(
             model=training_output["model"],
             model_name=model_config.name,
@@ -199,12 +209,60 @@ def _run_single_model(
             hist_num_bins=int(experiment_config.evaluation.hist_num_bins),
             model_dir=model_dir,
             device=experiment_config.device,
-            axis_abs_cos=(
-                None
-                if histogram_info.get("axis_abs_cos") is None
-                else float(histogram_info["axis_abs_cos"])
-            ),
+            axis_abs_cos=axis_abs_cos,
         )
+        training_output["model"].eval()
+        with torch.no_grad():
+            output = training_output["model"](
+                data["x_test"].to(device=experiment_config.device)
+            )
+        latents_tensor = output.get("latents")
+        if latents_tensor is not None and latents_tensor.ndim == 3:
+            latents = latents_tensor[0].detach().cpu().to(dtype=torch.float32)
+            latent_index = int(histogram_info["latent_index"])
+            oriented_latent = (
+                latents[:, latent_index] * float(orientation_sign)
+            ).numpy()
+
+            signed_coeffs = extract_signed_pair_coefficients(
+                data["coeffs_test"].detach().cpu().to(dtype=torch.float32)
+            )
+            signed_coeff = signed_coeffs[:, pair_index].numpy()
+            eligible_mask = (
+                data["pair_active_mask_test"][:, pair_index]
+                .detach()
+                .cpu()
+                .to(dtype=torch.bool)
+                .numpy()
+            )
+            corr_mask = eligible_mask & (signed_coeff != 0.0)
+            if bool(corr_mask.any()):
+                plots_dir = os.path.join(model_dir, "plots")
+                title = f"Bi-Jump Histogram - {model_config.name} latent {latent_index}"
+                if axis_abs_cos is not None:
+                    title = f"{title} (axis abs cos {axis_abs_cos:.3f})"
+                plot_bijump_histogram_logy(
+                    values=oriented_latent[corr_mask],
+                    hist_num_bins=int(experiment_config.evaluation.hist_num_bins),
+                    title=title,
+                    output_path=os.path.join(
+                        plots_dir,
+                        f"bi_jump_hist_{model_config.name}_latent{latent_index}_logy.png",
+                    ),
+                )
+                plot_latent_vs_coeff_scatter(
+                    latent=oriented_latent[corr_mask],
+                    signed_coeff=signed_coeff[corr_mask],
+                    title=(
+                        f"Latent vs coeff - {model_config.name} "
+                        f"pair {pair_index} latent {latent_index}"
+                    ),
+                    output_path=os.path.join(
+                        plots_dir,
+                        f"latent_vs_coeff_scatter_{model_config.name}"
+                        f"_pair{pair_index}_latent{latent_index}.png",
+                    ),
+                )
 
     training_summary.update(
         {

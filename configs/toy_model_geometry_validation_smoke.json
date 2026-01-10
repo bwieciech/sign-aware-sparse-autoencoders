@@ -1,5 +1,5 @@
 {
-  "output_dir": "tmp_toy_model_geometry_validation_runs",
+  "output_dir": "assets/tmp_toy_model_geometry_validation_runs",
   "device": "cpu",
   "run_id": "toy_model_geometry_validation_smoke",
   "verbose": false,

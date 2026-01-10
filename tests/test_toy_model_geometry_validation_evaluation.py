@@ -154,6 +154,21 @@ class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
         self.assertIsNone(one_sample_result)
         self.assertIsNone(constant_result)
 
+    def test_safe_pearsonr_returns_none_for_too_few_samples_or_nan(self) -> None:
+        # given
+        one_sample_x = torch.tensor([1.0])
+        one_sample_y = torch.tensor([2.0])
+        nan_x = torch.tensor([float("nan"), 1.0, 2.0])
+        y = torch.tensor([1.0, 2.0, 3.0])
+
+        # when
+        too_few = eval_module._safe_pearsonr(one_sample_x, one_sample_y)
+        nan_result = eval_module._safe_pearsonr(nan_x, y)
+
+        # then
+        self.assertIsNone(too_few)
+        self.assertIsNone(nan_result)
+
     def test_pearsonr_rejects_shape_mismatches(self) -> None:
         # given
         x = torch.zeros((2,))
@@ -286,6 +301,43 @@ class TestToyModelGeometryValidationEvaluation(unittest.TestCase):
         # then
         self.assertEqual(evaluation["num_pairs_evaluable"], 1)
         self.assertEqual(evaluation["num_pairs_consolidated"], 0)
+
+    def test_evaluate_toy2d_model_records_best_candidate_and_first_blocker(self) -> None:
+        # given
+        signed_coeffs = torch.tensor([-2.0, -1.0, 1.0, 2.0])
+        data = self._build_data(
+            signed_coeffs=signed_coeffs,
+            pair_axis_direction=torch.tensor([1.0, 0.0]),
+        )
+        latents = torch.tensor([-2.0, 0.0, 0.0, 2.0]).unsqueeze(1)
+        model = _FixedLatentsModel(
+            decoder_directions=torch.tensor([[1.0], [0.0]]),
+            latents=latents,
+        )
+        evaluation_config = Toy2DEvaluationConfig(
+            min_axis_abs_cos=0.9,
+            min_activation_corr=0.8,
+            min_sign_agreement=0.9,
+            min_regime_samples=2,
+            hist_num_bins=10,
+        )
+        evaluation_config.min_regime_coverage = 1.0  # type: ignore[attr-defined]
+
+        # when
+        evaluation = eval_module.evaluate_toy2d_model(
+            model=model,
+            data=data,
+            evaluation_config=evaluation_config,
+            model_name="coverage_blocked",
+            sign_aware=True,
+            device="cpu",
+        )
+
+        # then
+        self.assertEqual(evaluation["num_pairs_evaluable"], 1)
+        self.assertEqual(evaluation["num_pairs_consolidated"], 0)
+        self.assertEqual(len(evaluation["best_candidates"]), 1)
+        self.assertEqual(evaluation["best_candidates"][0]["first_blocker"], "coverage")
 
     def test_evaluate_toy2d_model_returns_zero_consolidation_for_non_negative_model(
         self,

@@ -1,7 +1,9 @@
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import torch
 
 from sgnsae.experiments.toy_model_geometry_validation import plotting as plotting_module
@@ -191,6 +193,92 @@ class TestToyModelGeometryValidationPlotting(unittest.TestCase):
 
             # then
             self.assertTrue(output_path.endswith("bi_jump_hist_zero_latents_latent0.png"))
+
+    def test_plot_bijump_histogram_logy_rejects_empty_values(self) -> None:
+        # given
+        values = np.array([], dtype=np.float64)
+
+        # when / then
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                _ = plotting_module.plot_bijump_histogram_logy(
+                    values=values,
+                    hist_num_bins=10,
+                    title="empty",
+                    output_path=os.path.join(tmpdir, "hist.png"),
+                )
+
+    def test_plot_bijump_histogram_logy_handles_all_zero_values(self) -> None:
+        # given
+        values = np.zeros((10,), dtype=np.float64)
+
+        # when
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = plotting_module.plot_bijump_histogram_logy(
+                values=values,
+                hist_num_bins=10,
+                title="zeros",
+                output_path=os.path.join(tmpdir, "hist.png"),
+            )
+
+            # then
+            self.assertTrue(output_path.endswith("hist.png"))
+            self.assertTrue(os.path.isfile(output_path))
+
+    def test_plot_latent_vs_coeff_scatter_rejects_invalid_inputs(self) -> None:
+        # given
+        latent = np.zeros((2,), dtype=np.float64)
+        signed_coeff = np.zeros((2,), dtype=np.float64)
+
+        # when / then
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(ValueError):
+                _ = plotting_module.plot_latent_vs_coeff_scatter(
+                    latent=np.zeros((2,), dtype=np.float64),
+                    signed_coeff=np.zeros((3,), dtype=np.float64),
+                    title="bad",
+                    output_path=os.path.join(tmpdir, "scatter.png"),
+                )
+            with self.assertRaises(ValueError):
+                _ = plotting_module.plot_latent_vs_coeff_scatter(
+                    latent=np.zeros((2, 1), dtype=np.float64),
+                    signed_coeff=np.zeros((2, 1), dtype=np.float64),
+                    title="bad",
+                    output_path=os.path.join(tmpdir, "scatter.png"),
+                )
+            with self.assertRaises(ValueError):
+                _ = plotting_module.plot_latent_vs_coeff_scatter(
+                    latent=np.array([], dtype=np.float64),
+                    signed_coeff=np.array([], dtype=np.float64),
+                    title="bad",
+                    output_path=os.path.join(tmpdir, "scatter.png"),
+                )
+            with self.assertRaises(ValueError):
+                _ = plotting_module.plot_latent_vs_coeff_scatter(
+                    latent=latent,
+                    signed_coeff=signed_coeff,
+                    title="bad",
+                    output_path=os.path.join(tmpdir, "scatter.png"),
+                    max_points=0,
+                )
+
+    def test_plot_latent_vs_coeff_scatter_samples_when_too_many_points(self) -> None:
+        # given
+        latent = np.arange(5000, dtype=np.float64)
+        signed_coeff = np.arange(5000, dtype=np.float64)
+
+        # when
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = plotting_module.plot_latent_vs_coeff_scatter(
+                latent=latent,
+                signed_coeff=signed_coeff,
+                title="scatter",
+                output_path=os.path.join(tmpdir, "scatter.png"),
+                max_points=4000,
+            )
+
+            # then
+            self.assertTrue(os.path.isfile(output_path))
 
 
 if __name__ == "__main__":  # pragma: no cover

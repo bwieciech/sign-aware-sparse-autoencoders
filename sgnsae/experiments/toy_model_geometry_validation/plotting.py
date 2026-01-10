@@ -1,6 +1,7 @@
 import os
 from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
 from torch import Tensor
 
@@ -164,6 +165,79 @@ def plot_bijump_histogram(
     output_path = os.path.join(
         plots_dir, f"bi_jump_hist_{model_name}_latent{latent_index}.png"
     )
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    return output_path
+
+
+def plot_bijump_histogram_logy(
+    values: np.ndarray,
+    hist_num_bins: int,
+    title: str,
+    output_path: str,
+) -> str:
+    plt = _import_matplotlib()
+
+    if values.size == 0:
+        raise ValueError("values must contain at least one element.")
+
+    max_abs = float(np.max(np.abs(values)))
+    if max_abs == 0.0:
+        max_abs = 1.0
+    max_abs *= 1.05
+
+    plt.figure(figsize=(8, 4))
+    plt.hist(
+        values,
+        bins=int(hist_num_bins),
+        range=(-max_abs, max_abs),
+        color="#1f77b4",
+        alpha=0.85,
+    )
+    plt.yscale("log")
+    plt.axvline(0.0, color="#222222", linewidth=1.0, alpha=0.7)
+    plt.title(f"{title} (log y)")
+    plt.xlabel("Signed latent activation")
+    plt.ylabel("Count (log)")
+    plt.grid(axis="y", color="#e0e0e0", linewidth=0.8)
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    return output_path
+
+
+def plot_latent_vs_coeff_scatter(
+    latent: np.ndarray,
+    signed_coeff: np.ndarray,
+    title: str,
+    output_path: str,
+    max_points: int = 4000,
+) -> str:
+    plt = _import_matplotlib()
+
+    if latent.shape != signed_coeff.shape:
+        raise ValueError("latent and signed_coeff must have the same shape.")
+    if latent.ndim != 1:
+        raise ValueError("latent and signed_coeff must be 1D arrays.")
+    if latent.size == 0:
+        raise ValueError("latent must contain at least one element.")
+    if max_points <= 0:
+        raise ValueError("max_points must be positive.")
+
+    if latent.size > max_points:
+        rng = np.random.RandomState(0)
+        indices = rng.choice(latent.size, size=int(max_points), replace=False)
+        x_values = signed_coeff[indices]
+        y_values = latent[indices]
+    else:
+        x_values = signed_coeff
+        y_values = latent
+
+    plt.figure(figsize=(5, 5))
+    plt.scatter(x_values, y_values, s=5, alpha=0.25)
+    plt.xlabel("Signed coeff c_j(x)")
+    plt.ylabel("Oriented latent a_i(x)")
+    plt.title(title)
+    plt.grid(axis="both", color="#e0e0e0", linewidth=0.8)
     plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     return output_path

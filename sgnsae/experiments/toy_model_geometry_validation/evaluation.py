@@ -69,6 +69,17 @@ def _pearsonr(x: Tensor, y: Tensor) -> Optional[float]:
     return float((x_centered * y_centered).sum().item() / denominator.item())
 
 
+def _safe_pearsonr(x: Tensor, y: Tensor) -> Optional[float]:
+    if x.numel() < 2 or y.numel() < 2:
+        return None
+    correlation = _pearsonr(x, y)
+    if correlation is None:
+        return None
+    if correlation != correlation:
+        return None
+    return correlation
+
+
 def _best_aligned_latent_by_pair(dot_products: Tensor) -> List[Dict[str, Any]]:
     abs_cos = dot_products.abs()
     best_latents = abs_cos.argmax(dim=0)
@@ -122,6 +133,7 @@ def _evaluate_pair_consolidation(
 
     evaluability: List[Dict[str, Any]] = []
     consolidated_pairs: List[Dict[str, Any]] = []
+    best_candidates: List[Dict[str, Any]] = []
     evaluable_count = 0
     consolidated_count = 0
     eps = 1e-8
@@ -151,73 +163,144 @@ def _evaluate_pair_consolidation(
             continue
 
         evaluable_count += 1
-        candidate_latents = abs_cos[:, pair_index] >= float(
-            evaluation_config.min_axis_abs_cos
-        )
-        if not bool(candidate_latents.any().item()):
-            continue
-
         best_candidate: Optional[Dict[str, Any]] = None
-        best_score: Optional[Tuple[float, float]] = None
-        for latent_index in range(d_hidden):
-            if not bool(candidate_latents[latent_index].item()):
-                continue
+        best_candidate_score = -1e9
+        best_passing_candidate: Optional[Dict[str, Any]] = None
+        best_passing_score: Optional[Tuple[float, float]] = None
+        corr_mask = eligible_coeffs != 0.0
+        min_cov = float(getattr(evaluation_config, "min_regime_coverage", 0.0))
+        eps_lat = float(getattr(evaluation_config, "eps_latent", 1e-8))
 
+        for latent_index in range(d_hidden):
             oriented_latents = (
                 latents[:, latent_index][eligible_mask]
                 * orientation_sign[latent_index, pair_index]
             )
             # Spec: correlation must be computed only on samples where |c_j(x)| > 0.
             # (eligible_coeffs already conditions on pair_active_mask for this pair)
-            corr_mask = eligible_coeffs != 0.0
-            activation_corr = _pearsonr(
+            activation_corr = _safe_pearsonr(
                 oriented_latents[corr_mask], eligible_coeffs[corr_mask]
             )
-            if activation_corr is None or activation_corr < float(
-                evaluation_config.min_activation_corr
-            ):
-                continue
+            magnitude_corr = _safe_pearsonr(
+                oriented_latents[corr_mask].abs(), eligible_coeffs[corr_mask].abs()
+            )
 
-            pos_sign_agreement = float(
-                (oriented_latents[positive_mask] > eps).float().mean().item()
+            pos_nonzero = oriented_latents[positive_mask].abs() > eps_lat
+            neg_nonzero = oriented_latents[negative_mask].abs() > eps_lat
+            pos_coverage = float(pos_nonzero.float().mean().item())
+            neg_coverage = float(neg_nonzero.float().mean().item())
+
+            pos_sign_agreement = (
+                None
+                if int(pos_nonzero.sum().item()) == 0
+                else float(
+                    (oriented_latents[positive_mask][pos_nonzero] > 0.0)
+                    .float()
+                    .mean()
+                    .item()
+                )
             )
-            neg_sign_agreement = float(
-                (oriented_latents[negative_mask] < -eps).float().mean().item()
+            neg_sign_agreement = (
+                None
+                if int(neg_nonzero.sum().item()) == 0
+                else float(
+                    (oriented_latents[negative_mask][neg_nonzero] < 0.0)
+                    .float()
+                    .mean()
+                    .item()
+                )
             )
-            if (
-                pos_sign_agreement < float(evaluation_config.min_sign_agreement)
-                or neg_sign_agreement < float(evaluation_config.min_sign_agreement)
-            ):
-                continue
 
             mean_pos = float(oriented_latents[positive_mask].mean().item())
             mean_neg = float(oriented_latents[negative_mask].mean().item())
-            if mean_pos <= 0.0 or mean_neg >= 0.0:
+
+            axis_abs_cos = float(abs_cos[latent_index, pair_index].item())
+            score = 0.0
+            if pos_sign_agreement is not None and neg_sign_agreement is not None:
+                score += 3.0 * (pos_sign_agreement + neg_sign_agreement) / 2.0
+            if magnitude_corr is not None:
+                score += 1.0 * magnitude_corr
+            if activation_corr is not None:
+                score += 1.0 * activation_corr
+            score += 0.2 * axis_abs_cos
+
+            first_blocker = None
+            if axis_abs_cos < float(evaluation_config.min_axis_abs_cos):
+                first_blocker = "axis_alignment"
+            elif (
+                activation_corr is None
+                or activation_corr < float(evaluation_config.min_activation_corr)
+            ):
+                first_blocker = "activation_corr"
+            elif pos_coverage < min_cov or neg_coverage < min_cov:
+                first_blocker = "coverage"
+            elif pos_sign_agreement is None or neg_sign_agreement is None:
+                first_blocker = "sign_agreement_missing"
+            elif (
+                pos_sign_agreement < float(evaluation_config.min_sign_agreement)
+                or neg_sign_agreement < float(evaluation_config.min_sign_agreement)
+            ):
+                first_blocker = "sign_agreement"
+            elif mean_pos <= 0.0 or mean_neg >= 0.0:
+                first_blocker = "mean_sign"
+
+            if score > best_candidate_score:
+                best_candidate_score = score
+                best_candidate = {
+                    "pair_index": pair_index,
+                    "latent_index": int(latent_index),
+                    "axis_abs_cos": axis_abs_cos,
+                    "orientation_sign": int(
+                        orientation_sign[latent_index, pair_index].item()
+                    ),
+                    "activation_corr": activation_corr,
+                    "magnitude_corr": magnitude_corr,
+                    "pos_coverage": pos_coverage,
+                    "neg_coverage": neg_coverage,
+                    "pos_sign_agreement": pos_sign_agreement,
+                    "neg_sign_agreement": neg_sign_agreement,
+                    "positive_regime_samples": pos_count,
+                    "negative_regime_samples": neg_count,
+                    "mean_activation_positive_regime": mean_pos,
+                    "mean_activation_negative_regime": mean_neg,
+                    "first_blocker": first_blocker,
+                }
+
+            if first_blocker is not None:
                 continue
 
-            score = (
-                float(activation_corr),
-                float(abs_cos[latent_index, pair_index].item()),
+            passing_score = (
+                float(activation_corr) if activation_corr is not None else -1e9,
+                axis_abs_cos,
             )
             candidate = {
                 "pair_index": pair_index,
                 "latent_index": int(latent_index),
-                "axis_abs_cos": score[1],
-                "activation_corr": score[0],
-                "positive_sign_agreement": pos_sign_agreement,
-                "negative_sign_agreement": neg_sign_agreement,
+                "axis_abs_cos": axis_abs_cos,
+                "activation_corr": float(activation_corr),
+                "magnitude_corr": magnitude_corr,
+                "pos_coverage": pos_coverage,
+                "neg_coverage": neg_coverage,
+                "pos_sign_agreement": float(pos_sign_agreement),
+                "neg_sign_agreement": float(neg_sign_agreement),
                 "positive_regime_samples": pos_count,
                 "negative_regime_samples": neg_count,
                 "mean_activation_positive_regime": mean_pos,
                 "mean_activation_negative_regime": mean_neg,
             }
-            if best_candidate is None or best_score is None or score > best_score:
-                best_candidate = candidate
-                best_score = score
+            if (
+                best_passing_candidate is None
+                or best_passing_score is None
+                or passing_score > best_passing_score
+            ):
+                best_passing_candidate = candidate
+                best_passing_score = passing_score
 
         if best_candidate is not None:
+            best_candidates.append(best_candidate)
+        if best_passing_candidate is not None:
             consolidated_count += 1
-            consolidated_pairs.append(best_candidate)
+            consolidated_pairs.append(best_passing_candidate)
 
     pair_consolidation_rate = (
         consolidated_count / float(num_pairs) if num_pairs else 0.0
@@ -235,6 +318,7 @@ def _evaluate_pair_consolidation(
         # Alias to satisfy requirements.md naming.
         "rate_over_evaluable_pairs": rate_over_evaluable,
         "evaluable_pair_fraction": evaluable_fraction,
+        "best_candidates": best_candidates,
     }
     return summary, evaluability, consolidated_pairs
 
