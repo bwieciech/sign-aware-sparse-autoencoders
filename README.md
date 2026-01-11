@@ -327,16 +327,113 @@ For each leaf run (`<run_dir>/width_<H>/seed_<seed>/`):
 
 This experiment trains baseline SAEs and the Sign-Aware Gated SAE on a synthetic 2D dataset with `k` antipodal feature pairs. It produces geometry-first diagnostics (unit-circle decoder plots), signed activation histograms, and a Pair Consolidation Rate sweep over within-pair correlation.
 
-### 0) Quickstart
+### 0) Prerequisites
 
-Run the smoke config:
+1) Install dependencies:
 ```bash
-.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_smoke.json
+.venv/bin/pip install -r requirements.txt
 ```
 
-Run the correlation sweep config:
+2) (Recommended) Sanity check before long runs:
 ```bash
-.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_sweep.json
+.venv/bin/python -m unittest
+```
+
+Notes:
+- Run commands from the repository root (so `sgnsae/` is importable).
+- Budget at least ~45 minutes wall time per run, depending on hardware.
+
+### 1) Paper runs (exact steps)
+
+All commands below write artifacts into `output_dir` specified in each config (defaults to `assets/tmp_toy_model_geometry_validation_runs`), under:
+`<output_dir>/toy_model_geometry_validation/<run_id>/`
+
+#### 1.1) k=8, correlation = -1 (3 seeds)
+
+Run seed 0:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_k8_corrm1.json
+```
+
+Run seed 1:
+- In `configs/toy_model_geometry_validation_paper_k8_corrm1.json`, change:
+  - `data.seed` from `0` to `1`
+  - `run_id` to `toy_model_geometry_validation_paper_k8_corrm1_seed1`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_k8_corrm1.json
+```
+
+Run seed 2:
+- In `configs/toy_model_geometry_validation_paper_k8_corrm1.json`, change:
+  - `data.seed` to `2`
+  - `run_id` to `toy_model_geometry_validation_paper_k8_corrm1_seed2`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_k8_corrm1.json
+```
+
+#### 1.2) k=8, correlation sweep (3 seeds)
+
+Note: this config was renamed to `configs/toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json`.
+
+Run seed 0:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json
+```
+
+Run seed 1:
+- In `configs/toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json`, change:
+  - `data.seed` from `0` to `1`
+  - `run_id` to `toy_model_geometry_validation_sweep_k8_identifiable_lognormal_seed1`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json
+```
+
+Run seed 2:
+- In `configs/toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json`, change:
+  - `data.seed` to `2`
+  - `run_id` to `toy_model_geometry_validation_sweep_k8_identifiable_lognormal_seed2`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json
+```
+
+#### 1.3) Superposition tolerance (k=16, active pairs per sample)
+
+Note: this config was renamed to `configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json`.
+
+Run `active_pairs_per_sample = 2` (seed 0):
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json
+```
+
+Run `active_pairs_per_sample = 1` (seed 0):
+- In `configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json`, change:
+  - `data.active_pairs_per_sample` to `1`
+  - `run_id` to `toy_model_geometry_validation_superposition_tolerance_k16_ap1_seed0`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json
+```
+
+Run `active_pairs_per_sample = 3` (seed 0):
+- In `configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json`, change:
+  - `data.active_pairs_per_sample` to `3`
+  - `run_id` to `toy_model_geometry_validation_superposition_tolerance_k16_ap3_seed0`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json
+```
+
+Run `active_pairs_per_sample = 4` (seed 0):
+- In `configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json`, change:
+  - `data.active_pairs_per_sample` to `4`
+  - `run_id` to `toy_model_geometry_validation_superposition_tolerance_k16_ap4_seed0`
+- Then run:
+```bash
+.venv/bin/python -m sgnsae.scripts.run_toy_model_geometry_validation_experiment --config-path configs/toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json
 ```
 
 Each run prints the final artifact directory:
