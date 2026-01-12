@@ -3,7 +3,7 @@ import os
 from dataclasses import asdict, replace
 from datetime import datetime
 from hashlib import sha256
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 
@@ -63,8 +63,12 @@ def _resolve_device(device: str) -> str:
     return device
 
 
+def _generate_run_id() -> str:
+    return datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+
+
 def _prepare_run_directory(config: PolarityDialExperimentConfig) -> tuple[str, str]:
-    run_id = config.run_id or datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    run_id = config.run_id or _generate_run_id()
     run_dir = os.path.join(config.output_dir, "polarity_dial", run_id)
     os.makedirs(run_dir, exist_ok=True)
     return run_dir, run_id
@@ -239,18 +243,33 @@ def _build_comparison_summary(
     }
 
 
-def run_polarity_dial_experiment(config_path: str) -> str:
-    raw_config = load_experiment_config(config_path)
-    device = _resolve_device(raw_config.device)
-    config = replace(raw_config, device=device)
+def run_polarity_dial(
+    experiment_config: PolarityDialExperimentConfig,
+) -> str | List[str]:
+    seed_value = experiment_config.data.seed
+    if isinstance(seed_value, list):
+        seeds = [int(seed) for seed in seed_value]
+        base_run_id = experiment_config.run_id or _generate_run_id()
+        run_dirs: List[str] = []
+        for seed in seeds:
+            per_seed_config = replace(
+                experiment_config,
+                data=replace(experiment_config.data, seed=seed),
+                run_id=f"{base_run_id}_seed{seed}",
+            )
+            run_dirs.append(run_polarity_dial(per_seed_config))
+        return run_dirs
+
+    device = _resolve_device(experiment_config.device)
+    config = replace(experiment_config, device=device)
     run_dir, run_id = _prepare_run_directory(config)
     persist_environment_metadata(run_dir)
     _persist_run_config(config, run_dir)
 
-    set_random_seed(config.data.seed)
+    set_random_seed(int(config.data.seed))
     data = generate_polarity_dial_dataset(config.data, device)
     export_data_summary(run_dir, config.data, data, config.sample_preview_count)
-    set_random_seed(config.data.seed)
+    set_random_seed(int(config.data.seed))
 
     calibration_by_model: Dict[str, Dict[str, Any]] = {}
     metadata_by_model: Dict[str, Dict[str, Any]] = {}
@@ -293,3 +312,8 @@ def run_polarity_dial_experiment(config_path: str) -> str:
             asymmetry_summary, os.path.join(run_dir, "asymmetry_sweep_calibration.png")
         )
     return run_dir
+
+
+def run_polarity_dial_experiment(config_path: str) -> str | List[str]:
+    raw_config = load_experiment_config(config_path)
+    return run_polarity_dial(raw_config)

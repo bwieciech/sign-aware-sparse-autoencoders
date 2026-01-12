@@ -67,6 +67,27 @@ class TestPolarityDialDataGeneration(unittest.TestCase):
         for key in data_first:
             self.assertTrue(torch.equal(data_first[key], data_second[key]))
 
+    def test_generate_dataset_raises_when_seed_is_list(self) -> None:
+        # given
+        config = PolarityDialDataConfig(
+            seed=[1, 2],
+            num_train=10,
+            num_val=5,
+            num_test=5,
+            input_dim=5,
+            num_features=3,
+            activation_prob=0.5,
+            positive_sign_prob=0.7,
+            lognormal_mu=0.0,
+            lognormal_sigma=0.5,
+            exponential_lambda=1.5,
+            noise_std=0.1,
+        )
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = generate_polarity_dial_dataset(config, self.device)
+
     def test_coefficient_sign_distribution_matches_configuration(self) -> None:
         # given
         config = PolarityDialDataConfig(

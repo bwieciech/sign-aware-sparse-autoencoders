@@ -120,7 +120,19 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
                 repo_root, "configs", "toy_model_geometry_validation_smoke.json"
             ),
             os.path.join(
-                repo_root, "configs", "toy_model_geometry_validation_sweep.json"
+                repo_root,
+                "configs",
+                "toy_model_geometry_validation_paper_sweep_k8_identifiable_lognormal.json",
+            ),
+            os.path.join(
+                repo_root,
+                "configs",
+                "toy_model_geometry_validation_paper_k8_corrm1.json",
+            ),
+            os.path.join(
+                repo_root,
+                "configs",
+                "toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json",
             ),
         ]
 

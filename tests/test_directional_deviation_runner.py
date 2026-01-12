@@ -693,7 +693,7 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             config = self._build_minimal_experiment_config(
                 output_dir=tmpdir, device="cpu", run_id="root"
             )
-            seed_config = replace(config, data=replace(config.data, seeds=[1, 2]))
+            seed_config = replace(config, data=replace(config.data, seed=[1, 2]))
 
             # when
             with patch.object(
@@ -814,7 +814,7 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
         # then
         self.assertIn("relu_sae", models)
 
-    def test_run_seed_sweep_raises_when_seeds_missing(self) -> None:
+    def test_run_seed_sweep_raises_when_seed_not_list(self) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
             config = self._build_minimal_experiment_config(
@@ -849,7 +849,7 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
                 output_dir=tmpdir, device="cpu", run_id="root"
             )
             seed_config = replace(
-                base_config, data=replace(base_config.data, seeds=[10, 11])
+                base_config, data=replace(base_config.data, seed=[10, 11])
             )
             run_dir = os.path.join(tmpdir, "directional_deviation", "root")
             os.makedirs(run_dir, exist_ok=True)
@@ -916,7 +916,6 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
                     seed_persisted = json.load(f)
                 self.assertIsNone(seed_persisted["wandb_api_key"])
                 self.assertEqual(seed_persisted["data"]["seed"], seed)
-                self.assertIsNone(seed_persisted["data"]["seeds"])
 
     def test_aggregate_seed_sweep_skips_seed_summaries_without_models_dict(
         self,
@@ -1353,7 +1352,7 @@ class TestDirectionalDeviationRunner(unittest.TestCase):
             config = self._build_minimal_experiment_config(
                 output_dir=tmpdir, device="cpu", run_id="root"
             )
-            sweep_config = replace(config, data=replace(config.data, seeds=[0]))
+            sweep_config = replace(config, data=replace(config.data, seed=[0]))
             run_dir = os.path.join(tmpdir, "directional_deviation", "root")
             os.makedirs(run_dir, exist_ok=True)
 

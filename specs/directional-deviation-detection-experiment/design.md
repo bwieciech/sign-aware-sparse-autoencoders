@@ -64,8 +64,7 @@ Module: `sgnsae.experiments.directional_deviation.config`
 #### Data config (normal generation)
 
 `DirectionalDeviationDataConfig` (extend):
-- `seed: int`
-- `seeds: Optional[List[int]]`
+- `seed: int | List[int]` (list enables seed sweep)
 - `num_train: int`
 - `num_val: int`
 - `num_test_normal: int`

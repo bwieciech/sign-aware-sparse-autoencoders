@@ -111,6 +111,37 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
             self.assertEqual(serialized["output_dir"], "/tmp/output")
             self.assertEqual(serialized["thresholds"]["score_fpr"], 0.01)
 
+    def test_load_config_accepts_legacy_seeds_key(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_base_raw_config(tmpdir)
+            raw_config["data"]["seeds"] = [1, 2]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            loaded = config_module.load_experiment_config(config_path)
+
+            # then
+            self.assertEqual(loaded.data.seed, [1, 2])
+
+    def test_load_config_rejects_seed_list_when_legacy_seeds_also_provided(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_base_raw_config(tmpdir)
+            raw_config["data"]["seed"] = [1, 2]
+            raw_config["data"]["seeds"] = [1, 2]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = config_module.load_experiment_config(config_path)
+
     def test_load_config_rejects_missing_sections(self) -> None:
         # given
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -127,6 +158,19 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             raw_config = self._build_base_raw_config(tmpdir)
             raw_config["scoring"] = ["not", "a", "dict"]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                config_module.load_experiment_config(config_path)
+
+    def test_load_config_rejects_data_section_when_not_object(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_base_raw_config(tmpdir)
+            raw_config["data"] = ["not", "an", "object"]
             config_path = os.path.join(tmpdir, "config.json")
             with open(config_path, "w") as f:
                 json.dump(raw_config, f)
@@ -198,6 +242,38 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         # when & then
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationDataConfig(**base_kwargs)
+
+    def test_data_config_rejects_seed_when_not_int(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": "nope",
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 4,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(**base_kwargs)  # type: ignore[arg-type]
+
+    def test_data_config_rejects_seed_list_with_non_integer(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": [1, "bad"],
+            "num_train": 2,
+            "num_val": 3,
+            "num_test_normal": 1,
+            "num_test_high_per_channel": 1,
+            "num_test_low_per_channel": 1,
+            "num_channels": 4,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.DirectionalDeviationDataConfig(**base_kwargs)  # type: ignore[list-item]
 
     def test_data_config_rejects_invalid_train_anomaly_fraction(self) -> None:
         # given
@@ -1272,7 +1348,7 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
                 **{**base_kwargs, "anomaly_eval_mode": "invalid"}  # type: ignore[arg-type]
             )
 
-    def test_data_config_validates_seeds(self) -> None:
+    def test_data_config_validates_seed_list(self) -> None:
         # given
         base_kwargs = {
             "seed": 1,
@@ -1287,16 +1363,16 @@ class TestDirectionalDeviationConfig(unittest.TestCase):
         # when & then
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationDataConfig(
-                **{**base_kwargs, "seeds": []}
+                **{**base_kwargs, "seed": []}
             )
         with self.assertRaises(ValueError):
             _ = config_module.DirectionalDeviationDataConfig(
-                **{**base_kwargs, "seeds": [1, 1]}
+                **{**base_kwargs, "seed": [1, 1]}
             )
         config_ok = config_module.DirectionalDeviationDataConfig(
-            **{**base_kwargs, "seeds": [1, 2]}
+            **{**base_kwargs, "seed": [1, 2]}
         )
-        self.assertEqual(config_ok.seeds, [1, 2])
+        self.assertEqual(config_ok.seed, [1, 2])
 
     def test_anomaly_config_validation(self) -> None:
         # given

@@ -96,7 +96,7 @@
     - If `width_sweep` is provided, run separate sub-runs per width \(H\) (overriding each model’s `d_hidden`) and collate results into a single comparison artifact under the parent run directory.
     - _Requirements: 4.4_
   - [x] 6.3 Implement multi-seed orchestration and aggregation (optional but recommended)
-    - If `seeds` is provided, run separate sub-runs per seed and collate mean/std metrics into the comparison artifact(s).
+    - If `data.seed` is a list, run separate sub-runs per seed and collate mean/std metrics into the comparison artifact(s).
     - _Requirements: 4.5_
 
 - [x] 7. Add minimal plotting helpers (optional but recommended)

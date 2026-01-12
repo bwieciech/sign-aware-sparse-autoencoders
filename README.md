@@ -261,7 +261,7 @@ For paper plots and numbers, use:
 - Models: `models[]` (each has `name`, `sae_class`, `sign_aware`, `d_hidden`, training hyperparameters).
 - Sweeps:
   - Width sweep: add `"width_sweep": [32, 64, 128]` at the run root to run separate `width_<H>/` subruns.
-  - Seed sweep: set `data.seeds: [0, 1, 2]` to run separate `seed_<seed>/` subruns.
+  - Seed sweep: set `data.seed: [0, 1, 2]` to run separate `seed_<seed>/` subruns.
 
 ### 3) Outputs to expect
 
@@ -303,7 +303,7 @@ For the paper run `<run_dir>`:
 
 For each width subrun (`<run_dir>/width_<H>/`):
 - `config.json`
-- `comparison_summary.json` (seed sweep summary, if `data.seeds` is enabled)
+- `comparison_summary.json` (seed sweep summary, if `data.seed` is a list)
 - `metrics.json`
 
 For each leaf run (`<run_dir>/width_<H>/seed_<seed>/`):

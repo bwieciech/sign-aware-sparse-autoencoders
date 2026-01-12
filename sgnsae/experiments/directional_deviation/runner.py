@@ -622,16 +622,17 @@ def _run_seed_sweep(
     run_dir: str,
     batch_size: int,
 ) -> Dict[str, Any]:
-    if config.data.seeds is None:
-        raise ValueError("Expected config.data.seeds to be set for seed sweep.")
+    if not isinstance(config.data.seed, list):
+        raise ValueError("Expected config.data.seed to be a list for seed sweep.")
 
     seed_summaries: Dict[int, Dict[str, Any]] = {}
-    for seed in config.data.seeds:
+    seeds = [int(seed) for seed in config.data.seed]
+    for seed in seeds:
         seed_dir = os.path.join(run_dir, f"seed_{seed}")
         os.makedirs(seed_dir, exist_ok=True)
         seed_config = replace(
             config,
-            data=replace(config.data, seed=int(seed), seeds=None),
+            data=replace(config.data, seed=int(seed)),
         )
         _persist_run_config(seed_config, seed_dir)
         seed_summaries[int(seed)] = _run_leaf_experiment(
@@ -641,7 +642,7 @@ def _run_seed_sweep(
         )
 
     summary = {
-        "sweep": {"type": "seed", "seeds": [int(value) for value in config.data.seeds]},
+        "sweep": {"type": "seed", "seeds": [int(value) for value in seeds]},
         "per_seed": {str(seed): seed_summaries[seed] for seed in seed_summaries},
         "aggregate_over_seeds": _aggregate_seed_sweep(seed_summaries),
     }
@@ -754,7 +755,7 @@ def _run_experiment_dispatch(
 ) -> Dict[str, Any]:
     if config.width_sweep is not None:
         return _run_width_sweep(config=config, run_dir=run_dir, batch_size=batch_size)
-    if config.data.seeds is not None:
+    if isinstance(config.data.seed, list):
         return _run_seed_sweep(config=config, run_dir=run_dir, batch_size=batch_size)
     return _run_leaf_experiment(config=config, run_dir=run_dir, batch_size=batch_size)
 

@@ -112,9 +112,15 @@ def generate_polarity_dial_dataset(
     config: PolarityDialDataConfig,
     device: str,
 ) -> Dict[str, Tensor]:
-    set_random_seed(config.seed)
+    if isinstance(config.seed, list):
+        raise ValueError(
+            "seed must be a single integer when generating Polarity Dial data; "
+            "resolve multi-seed configurations in the runner."
+        )
+    seed = int(config.seed)
+    set_random_seed(seed)
     generator = torch.Generator(device=device)
-    generator.manual_seed(config.seed)
+    generator.manual_seed(seed)
 
     feature_directions = torch.randn(
         (config.num_features, config.input_dim), device=device, generator=generator

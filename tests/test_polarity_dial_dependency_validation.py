@@ -246,6 +246,39 @@ class TestPolarityDialDependencyValidation(unittest.TestCase):
         self.assertIn("Loaded Polarity Dial config", stdout.getvalue())
         self.assertIn("Run complete. Artifacts written to", stdout.getvalue())
 
+    def test_main_prints_all_run_dirs_when_runner_returns_list(self) -> None:
+        # given
+        @dataclass
+        class DummyConfig:
+            seed: int
+
+        stdout = io.StringIO()
+        argv = ["prog", "--config-path", "config.json"]
+        with (
+            patch.object(
+                run_polarity_dial_experiment,
+                "validate_polarity_dial_dependencies",
+                return_value=None,
+            ),
+            patch(
+                "sgnsae.experiments.polarity_dial.load_experiment_config",
+                return_value=DummyConfig(seed=1),
+            ),
+            patch(
+                "sgnsae.experiments.polarity_dial.run_polarity_dial_experiment",
+                return_value=["run_dir_a", "run_dir_b"],
+            ),
+            patch.object(sys, "argv", argv),
+            patch.object(sys, "stdout", stdout),
+        ):
+            # when
+            run_polarity_dial_experiment.main()
+
+        # then
+        output = stdout.getvalue()
+        self.assertIn("Run complete. Artifacts written to: run_dir_a", output)
+        self.assertIn("Run complete. Artifacts written to: run_dir_b", output)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -73,8 +73,12 @@ def main() -> None:
     print("Loaded Polarity Dial config:")
     json.dump(asdict(config), sys.stdout, indent=2, default=str)
     print("\nStarting run...")
-    run_dir = run_polarity_dial_experiment(args.config_path)
-    print(f"Run complete. Artifacts written to: {run_dir}")
+    run_output = run_polarity_dial_experiment(args.config_path)
+    if isinstance(run_output, list):
+        for run_dir in run_output:
+            print(f"Run complete. Artifacts written to: {run_dir}")
+    else:
+        print(f"Run complete. Artifacts written to: {run_output}")
 
 
 if __name__ == "__main__":  # pragma: no cover

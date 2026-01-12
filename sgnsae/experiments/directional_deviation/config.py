@@ -45,7 +45,7 @@ def _validate_adam_betas(adam_betas: Tuple[float, float]) -> None:
 
 @dataclass
 class DirectionalDeviationDataConfig:
-    seed: int
+    seed: int | List[int]
     num_train: int
     num_val: int
     num_test_normal: int
@@ -65,9 +65,24 @@ class DirectionalDeviationDataConfig:
     student_t_df: Optional[float] = None
     anomaly_eval_mode: Literal["materialize", "stream"] = "stream"
     train_anomaly_fraction: float = 0.0
-    seeds: Optional[List[int]] = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.seed, list):
+            if not self.seed:
+                raise ValueError(
+                    "seed must be a non-empty list when provided as a list."
+                )
+            if len(set(self.seed)) != len(self.seed):
+                raise ValueError("seed must not contain duplicates.")
+            for index, seed_value in enumerate(self.seed):
+                if not isinstance(seed_value, int) or isinstance(seed_value, bool):
+                    raise ValueError(
+                        "seed values must be integers; received "
+                        f"seed[{index}]={seed_value}."
+                    )
+        elif not isinstance(self.seed, int) or isinstance(self.seed, bool):
+            raise ValueError(f"seed must be an integer; received {self.seed}.")
+
         for field_name in ("num_train", "num_val", "num_channels"):
             _validate_positive_int(getattr(self, field_name), field_name)
         for field_name in (
@@ -172,12 +187,6 @@ class DirectionalDeviationDataConfig:
                 "train_anomaly_fraction must be within [0, 1]; "
                 f"received {self.train_anomaly_fraction}."
             )
-
-        if self.seeds is not None:
-            if not self.seeds:
-                raise ValueError("seeds must be a non-empty list when provided.")
-            if len(set(self.seeds)) != len(self.seeds):
-                raise ValueError("seeds must not contain duplicates.")
 
 
 @dataclass
@@ -669,7 +678,18 @@ def load_experiment_config(path: str) -> DirectionalDeviationExperimentConfig:
     if not isinstance(raw_config["models"], list):
         raise ValueError("The 'models' section must be a list of model configurations.")
 
-    data_config = DirectionalDeviationDataConfig(**raw_config["data"])
+    data_raw = raw_config["data"]
+    if not isinstance(data_raw, dict):
+        raise ValueError("The 'data' section must be an object.")
+    data_raw = dict(data_raw)
+    if "seeds" in data_raw:
+        seeds_value = data_raw.pop("seeds")
+        if isinstance(data_raw.get("seed"), list):
+            raise ValueError(
+                "Provide either data.seed as a list or legacy data.seeds, not both."
+            )
+        data_raw["seed"] = seeds_value
+    data_config = DirectionalDeviationDataConfig(**data_raw)
     anomaly_config = DirectionalDeviationAnomalyConfig(**raw_config["anomaly"])
     threshold_config = DirectionalDeviationThresholdConfig(**raw_config["thresholds"])
     raw_scoring_config = raw_config.get("scoring")

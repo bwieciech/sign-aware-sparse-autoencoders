@@ -53,6 +53,92 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 **{**base_kwargs, "exponential_lambda": 0.0}
             )
 
+    def test_data_config_accepts_seed_list(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": [1, 2],
+            "num_train": 2,
+            "num_val": 1,
+            "num_test": 1,
+            "input_dim": 2,
+            "num_features": 1,
+            "activation_prob": 0.5,
+            "positive_sign_prob": 0.5,
+            "lognormal_mu": 0.0,
+            "lognormal_sigma": 0.5,
+            "exponential_lambda": 1.0,
+            "noise_std": 0.0,
+        }
+
+        # when
+        config = config_module.PolarityDialDataConfig(**base_kwargs)
+
+        # then
+        self.assertEqual(config.seed, [1, 2])
+
+    def test_data_config_rejects_empty_seed_list(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": [],
+            "num_train": 2,
+            "num_val": 1,
+            "num_test": 1,
+            "input_dim": 2,
+            "num_features": 1,
+            "activation_prob": 0.5,
+            "positive_sign_prob": 0.5,
+            "lognormal_mu": 0.0,
+            "lognormal_sigma": 0.5,
+            "exponential_lambda": 1.0,
+            "noise_std": 0.0,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.PolarityDialDataConfig(**base_kwargs)
+
+    def test_data_config_rejects_seed_when_not_int(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": "nope",
+            "num_train": 2,
+            "num_val": 1,
+            "num_test": 1,
+            "input_dim": 2,
+            "num_features": 1,
+            "activation_prob": 0.5,
+            "positive_sign_prob": 0.5,
+            "lognormal_mu": 0.0,
+            "lognormal_sigma": 0.5,
+            "exponential_lambda": 1.0,
+            "noise_std": 0.0,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.PolarityDialDataConfig(**base_kwargs)  # type: ignore[arg-type]
+
+    def test_data_config_rejects_seed_list_with_non_integer(self) -> None:
+        # given
+        base_kwargs = {
+            "seed": [1, "bad"],
+            "num_train": 2,
+            "num_val": 1,
+            "num_test": 1,
+            "input_dim": 2,
+            "num_features": 1,
+            "activation_prob": 0.5,
+            "positive_sign_prob": 0.5,
+            "lognormal_mu": 0.0,
+            "lognormal_sigma": 0.5,
+            "exponential_lambda": 1.0,
+            "noise_std": 0.0,
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.PolarityDialDataConfig(**base_kwargs)  # type: ignore[list-item]
+
     def test_validate_positive_int_raises_for_non_positive(self) -> None:
         # given
         value = 0
@@ -1451,6 +1537,92 @@ class TestPolarityDialRunnerUtilities(unittest.TestCase):
             # then
             self.assertEqual(run_id, "fixed")
             self.assertTrue(run_dir.endswith(os.path.join("polarity_dial", "fixed")))
+
+    def test_run_polarity_dial_supports_seed_list_and_suffixes_run_id(self) -> None:
+        # given
+        model_config = config_module.PolarityDialModelVariantConfig(
+            name="model",
+            sae_class="SAE",
+            sign_aware=False,
+            single_activation_offset=False,
+            reset_activation_offsets_on_resample=False,
+            d_hidden=2,
+            sparsity_coeff=0.0,
+            learning_rate=0.01,
+            num_epochs=1,
+            batch_size=2,
+            adam_betas=(0.9, 0.999),
+        )
+        data_config = config_module.PolarityDialDataConfig(
+            seed=[0, 3],
+            num_train=2,
+            num_val=1,
+            num_test=1,
+            input_dim=2,
+            num_features=1,
+            activation_prob=0.5,
+            positive_sign_prob=0.5,
+            lognormal_mu=0.0,
+            lognormal_sigma=0.5,
+            exponential_lambda=1.0,
+            noise_std=0.0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            experiment_config = config_module.PolarityDialExperimentConfig(
+                output_dir=tmpdir,
+                device="cpu",
+                data=data_config,
+                models=[model_config],
+                evaluation=config_module.PolarityDialEvaluationConfig(),
+                run_id="unittest",
+                verbose=False,
+                log_every_n_steps=1000,
+                log_every_n_epochs=1000,
+                sample_preview_count=1,
+            )
+
+            def single_model_side_effect(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+                return {
+                    "calibration": {
+                        "summary": {
+                            "mean_rel_error_plus": None,
+                            "mean_rel_error_minus": None,
+                        }
+                    },
+                    "metadata": {},
+                }
+
+            # when
+            with (
+                patch.object(runner_module, "persist_environment_metadata"),
+                patch.object(
+                    runner_module, "generate_polarity_dial_dataset", return_value={}
+                ),
+                patch.object(runner_module, "export_data_summary"),
+                patch.object(
+                    runner_module,
+                    "_run_single_model",
+                    side_effect=single_model_side_effect,
+                ),
+                patch.object(runner_module, "plot_gamma_comparison"),
+            ):
+                run_dirs = runner_module.run_polarity_dial(experiment_config)
+
+            # then
+            self.assertEqual(
+                run_dirs,
+                [
+                    os.path.join(tmpdir, "polarity_dial", "unittest_seed0"),
+                    os.path.join(tmpdir, "polarity_dial", "unittest_seed3"),
+                ],
+            )
+            for seed, run_dir in zip((0, 3), run_dirs):
+                self.assertTrue(os.path.isdir(run_dir))
+                with open(os.path.join(run_dir, "config.json"), "r") as f:
+                    persisted_config = json.load(f)
+                self.assertEqual(persisted_config["run_id"], f"unittest_seed{seed}")
+                self.assertEqual(persisted_config["data"]["seed"], seed)
 
 
 if __name__ == "__main__":  # pragma: no cover
