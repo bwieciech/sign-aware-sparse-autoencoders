@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+import warnings
 from typing import Any, Dict
 from unittest.mock import patch
 
@@ -240,6 +241,144 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
             )
             self.assertIsNone(evaluation["rate_over_evaluable_pairs"])
             self.assertIsNone(evaluation["histogram_latent"])
+
+    def test_run_experiment_supports_seed_list_and_appends_run_id(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            raw_config["data"]["seed"] = [0, 3]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                config_path
+            )
+
+            # then
+            self.assertIsInstance(run_dirs, list)
+            expected_dirs = [
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed0"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed3"
+                ),
+            ]
+            self.assertEqual(run_dirs, expected_dirs)
+
+            for run_dir, expected_seed, expected_run_id in zip(
+                run_dirs,
+                [0, 3],
+                ["unittest_run_seed0", "unittest_run_seed3"],
+            ):
+                self.assertTrue(os.path.isdir(run_dir))
+                with open(os.path.join(run_dir, "config.json"), "r") as f:
+                    persisted_config = json.load(f)
+                self.assertEqual(persisted_config["run_id"], expected_run_id)
+                self.assertEqual(persisted_config["data"]["seed"], expected_seed)
+
+    def test_run_experiment_seed_list_raises_when_any_requested_run_dir_exists(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            raw_config["data"]["seed"] = [0, 3]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            existing_dir = os.path.join(
+                tmpdir, "toy_model_geometry_validation", "unittest_run_seed3"
+            )
+            os.makedirs(existing_dir, exist_ok=True)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+    def test_run_experiment_seed_list_suffixes_generated_run_id_on_collision(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id=None)
+            raw_config["data"]["seed"] = [0, 3]
+            raw_config["device"] = "cpu"
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module, "_generate_run_id", return_value="fixed_id"
+            ):
+                run_parent = os.path.join(tmpdir, "toy_model_geometry_validation")
+                os.makedirs(os.path.join(run_parent, "fixed_id_seed0"), exist_ok=True)
+                os.makedirs(os.path.join(run_parent, "fixed_id_1_seed0"), exist_ok=True)
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertIsInstance(run_dirs, list)
+            expected_dirs = [
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "fixed_id_2_seed0"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "fixed_id_2_seed3"
+                ),
+            ]
+            self.assertEqual(run_dirs, expected_dirs)
+            self.assertTrue(os.path.isdir(expected_dirs[0]))
+            self.assertTrue(os.path.isdir(expected_dirs[1]))
+
+    def test_run_experiment_seed_list_uses_generated_run_id_when_no_collision(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id=None)
+            raw_config["data"]["seed"] = [0, 3]
+            raw_config["device"] = "cpu"
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module, "_generate_run_id", return_value="fixed_id"
+            ):
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertIsInstance(run_dirs, list)
+            expected_dirs = [
+                os.path.join(tmpdir, "toy_model_geometry_validation", "fixed_id_seed0"),
+                os.path.join(tmpdir, "toy_model_geometry_validation", "fixed_id_seed3"),
+            ]
+            self.assertEqual(run_dirs, expected_dirs)
+            self.assertTrue(os.path.isdir(expected_dirs[0]))
+            self.assertTrue(os.path.isdir(expected_dirs[1]))
+
+    def test_warn_if_width_name_mismatch_emits_warning(self) -> None:
+        # given
+        warnings.simplefilter("always")
+
+        # when / then
+        with self.assertWarns(UserWarning):
+            runner_module._warn_if_width_name_mismatch(
+                model_name="baseline_k",
+                d_hidden=5,
+                num_pairs=4,
+            )
 
     def test_run_experiment_respects_output_dir_when_already_parent(self) -> None:
         # given

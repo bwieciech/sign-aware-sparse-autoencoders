@@ -1,13 +1,13 @@
 {
   "output_dir": "assets/tmp_toy_model_geometry_validation_runs",
   "device": "auto",
-  "run_id": "toy_model_geometry_validation_sweep_k8_identifiable_lognormal_seed0",
+  "run_id": "toy_model_geometry_validation_sweep_k8_identifiable_lognormal",
   "verbose": true,
   "log_every_n_steps": 1000,
   "log_every_n_epochs": 1,
   "sample_preview_count": 1024,
   "data": {
-    "seed": 0,
+    "seed": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     "num_train": 100000,
     "num_val": 10000,
     "num_test": 10000,

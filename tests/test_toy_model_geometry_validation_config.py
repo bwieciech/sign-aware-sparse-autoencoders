@@ -208,6 +208,40 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
                 **{**base_kwargs, "direction_mode": "not_a_mode"}
             )
 
+    def test_data_config_accepts_seed_list(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when
+        config = config_module.Toy2DDataConfig(**{**base_kwargs, "seed": [1, 2, 3]})
+
+        # then
+        self.assertEqual(config.seed, [1, 2, 3])
+
+    def test_data_config_rejects_empty_seed_list(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(**{**base_kwargs, "seed": []})
+
+    def test_data_config_rejects_seed_when_not_int(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(**{**base_kwargs, "seed": "nope"})
+
+    def test_data_config_rejects_seed_list_with_non_integer_value(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(**{**base_kwargs, "seed": [1, "bad"]})
+
     def test_data_config_rejects_missing_pair_correlation_when_grid_not_set(
         self,
     ) -> None:

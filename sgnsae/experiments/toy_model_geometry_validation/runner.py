@@ -84,6 +84,42 @@ def _prepare_run_directory(config: Toy2DExperimentConfig) -> Tuple[str, str]:
     return run_dir, run_id
 
 
+def _resolve_multi_seed_base_run_id(
+    experiment_config: Toy2DExperimentConfig,
+    seeds: List[int],
+) -> str:
+    requested_run_id = experiment_config.run_id
+    base_run_id = requested_run_id or _generate_run_id()
+    run_parent = _resolve_run_parent_dir(experiment_config.output_dir)
+
+    def any_seed_run_dir_exists(candidate_base_run_id: str) -> bool:
+        for seed in seeds:
+            if os.path.exists(
+                os.path.join(run_parent, f"{candidate_base_run_id}_seed{seed}")
+            ):
+                return True
+        return False
+
+    if requested_run_id is not None:
+        if any_seed_run_dir_exists(base_run_id):
+            raise ValueError(
+                "At least one requested run directory already exists for the provided "
+                "seed list. Choose a different run_id or remove the existing run(s) "
+                f"under: {run_parent}"
+            )
+        return base_run_id
+
+    if not any_seed_run_dir_exists(base_run_id):
+        return base_run_id
+
+    suffix = 1
+    while True:
+        candidate_base_run_id = f"{base_run_id}_{suffix}"
+        if not any_seed_run_dir_exists(candidate_base_run_id):
+            return candidate_base_run_id
+        suffix += 1
+
+
 def _persist_run_config(config: Toy2DExperimentConfig, run_dir: str) -> None:
     config_path = os.path.join(run_dir, "config.json")
     with open(config_path, "w") as f:
@@ -106,7 +142,9 @@ def _format_pair_correlation(value: float) -> str:
     return str(normalized)
 
 
-def _warn_if_width_name_mismatch(model_name: str, d_hidden: int, num_pairs: int) -> None:
+def _warn_if_width_name_mismatch(
+    model_name: str, d_hidden: int, num_pairs: int
+) -> None:
     """
     Protocol C uses naming conventions like *_k and *_2k to communicate intended width.
     This check prevents accidental mismatches (e.g. num_pairs=8 but d_hidden=64).
@@ -409,7 +447,9 @@ def _run_sweep_experiment(
                 "pair_consolidation_rate_over_evaluable_pairs": model_summary.get(
                     "pair_consolidation_rate_over_evaluable_pairs"
                 ),
-                "rate_over_evaluable_pairs": model_summary.get("rate_over_evaluable_pairs"),
+                "rate_over_evaluable_pairs": model_summary.get(
+                    "rate_over_evaluable_pairs"
+                ),
                 "evaluable_pair_fraction": model_summary.get("evaluable_pair_fraction"),
                 "num_pairs_evaluable": model_summary.get("num_pairs_evaluable"),
                 "num_pairs_consolidated": model_summary.get("num_pairs_consolidated"),
@@ -445,7 +485,23 @@ def _run_sweep_experiment(
     return leaf_dirs
 
 
-def run_toy_model_geometry_validation(experiment_config: Toy2DExperimentConfig) -> str:
+def run_toy_model_geometry_validation(
+    experiment_config: Toy2DExperimentConfig,
+) -> str | List[str]:
+    seed_value = experiment_config.data.seed
+    if isinstance(seed_value, list):
+        seeds = [int(seed) for seed in seed_value]
+        base_run_id = _resolve_multi_seed_base_run_id(experiment_config, seeds)
+        run_dirs: List[str] = []
+        for seed in seeds:
+            per_seed_config = replace(
+                experiment_config,
+                data=replace(experiment_config.data, seed=seed),
+                run_id=f"{base_run_id}_seed{seed}",
+            )
+            run_dirs.append(run_toy_model_geometry_validation(per_seed_config))
+        return run_dirs
+
     device = _resolve_device(experiment_config.device)
     config = replace(experiment_config, device=device)
     run_dir, run_id = _prepare_run_directory(config)
@@ -459,6 +515,6 @@ def run_toy_model_geometry_validation(experiment_config: Toy2DExperimentConfig) 
     return run_dir
 
 
-def run_toy_model_geometry_validation_experiment(config_path: str) -> str:
+def run_toy_model_geometry_validation_experiment(config_path: str) -> str | List[str]:
     raw_config = load_experiment_config(config_path)
     return run_toy_model_geometry_validation(raw_config)

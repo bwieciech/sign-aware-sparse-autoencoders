@@ -82,7 +82,7 @@ def _validate_pair_correlation(
 
 @dataclass
 class Toy2DDataConfig:
-    seed: int
+    seed: int | List[int]
     num_train: int
     num_val: int
     num_test: int
@@ -100,6 +100,20 @@ class Toy2DDataConfig:
     noise_std: float = 0.01
 
     def __post_init__(self) -> None:
+        if isinstance(self.seed, list):
+            if not self.seed:
+                raise ValueError(
+                    "seed must be a non-empty list when provided as a list."
+                )
+            for index, seed_value in enumerate(self.seed):
+                if not isinstance(seed_value, int) or isinstance(seed_value, bool):
+                    raise ValueError(
+                        "seed values must be integers; received "
+                        f"seed[{index}]={seed_value}."
+                    )
+        elif not isinstance(self.seed, int) or isinstance(self.seed, bool):
+            raise ValueError(f"seed must be an integer; received {self.seed}.")
+
         for field_name in ("num_train", "num_val", "num_test", "num_pairs"):
             _validate_positive_int(getattr(self, field_name), field_name)
 

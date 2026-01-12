@@ -85,7 +85,9 @@ def _sample_pair_active_mask(
         return g.to(dtype=torch.bool)
     n = int(config.active_pairs_per_sample)
     if not (0 <= n <= k):
-        raise ValueError(f"active_pairs_per_sample must be in [0,k]; got {n} for k={k}.")
+        raise ValueError(
+            f"active_pairs_per_sample must be in [0,k]; got {n} for k={k}."
+        )
     g = torch.zeros((num_samples, k), device="cpu", dtype=torch.bool)
     # Sample exactly n pairs without replacement per sample
     for i in range(num_samples):
@@ -247,8 +249,14 @@ def generate_toy2d_dataset(
     config: Toy2DDataConfig,
     device: str,
 ) -> Dict[str, Tensor]:
-    set_random_seed(config.seed)
-    generator = _create_cpu_generator(config.seed)
+    if isinstance(config.seed, list):
+        raise ValueError(
+            "seed must be a single integer when generating toy data; "
+            "resolve multi-seed configurations in the runner."
+        )
+    seed = int(config.seed)
+    set_random_seed(seed)
+    generator = _create_cpu_generator(seed)
     pair_axis_angles = _generate_pair_axis_angles(config, generator)
     pair_axis_directions, feature_directions = _construct_pair_directions(
         pair_axis_angles

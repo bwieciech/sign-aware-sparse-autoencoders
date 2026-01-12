@@ -86,6 +86,53 @@ class TestToyModelGeometryValidationCli(unittest.TestCase):
                 os.path.isfile(os.path.join(expected_run_dir, "environment.json"))
             )
 
+    def test_cli_main_supports_seed_list_and_appends_run_id(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir)
+            raw_config["data"]["seed"] = [0, 3]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            stdout = io.StringIO()
+            argv = ["prog", "--config-path", config_path]
+
+            # when
+            with (
+                patch.object(script_module.sys, "argv", argv),
+                patch.object(script_module.sys, "stdout", stdout),
+                patch.object(
+                    script_module,
+                    "validate_toy_model_geometry_validation_dependencies",
+                    return_value=None,
+                ),
+            ):
+                script_module.main()
+
+            # then
+            marker = "Run complete. Artifacts written to:"
+            run_dirs = [
+                line[len(marker) :].strip()
+                for line in stdout.getvalue().splitlines()
+                if line.startswith(marker)
+            ]
+            expected_run_dirs = [
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed0"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed3"
+                ),
+            ]
+            self.assertEqual(run_dirs, expected_run_dirs)
+            for run_dir in run_dirs:
+                self.assertTrue(os.path.isdir(run_dir))
+                self.assertTrue(os.path.isfile(os.path.join(run_dir, "config.json")))
+                self.assertTrue(
+                    os.path.isfile(os.path.join(run_dir, "environment.json"))
+                )
+
     def test_import_or_raise_fails_with_install_hint_on_missing_module(self) -> None:
         # given
         def raise_module_not_found(_: str) -> types.ModuleType:

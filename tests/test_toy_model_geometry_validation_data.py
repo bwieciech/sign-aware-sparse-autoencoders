@@ -118,6 +118,14 @@ class TestToyModelGeometryValidationDataGeneration(unittest.TestCase):
         for key in data_first:
             self.assertTrue(torch.equal(data_first[key], data_second[key]))
 
+    def test_generate_dataset_raises_when_seed_is_list(self) -> None:
+        # given
+        config = self._build_config({"seed": [1, 2]})
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = generate_toy2d_dataset(config, self.device)
+
     def test_pair_active_mask_zeroes_out_coefficients_for_inactive_pairs(self) -> None:
         # given
         config = self._build_config({"seed": 7, "num_train": 256, "num_pairs": 3})
@@ -133,6 +141,36 @@ class TestToyModelGeometryValidationDataGeneration(unittest.TestCase):
         inactive_mask = ~pair_active_mask
         self.assertTrue(bool((plus_coeffs[inactive_mask] == 0.0).all()))
         self.assertTrue(bool((minus_coeffs[inactive_mask] == 0.0).all()))
+
+    def test_active_pairs_per_sample_selects_exactly_n_pairs_per_sample(self) -> None:
+        # given
+        config = self._build_config(
+            {
+                "seed": 19,
+                "num_train": 256,
+                "num_val": 1,
+                "num_test": 1,
+                "num_pairs": 4,
+                "active_pairs_per_sample": 2,
+                "pair_axis_active_prob": 0.0,
+            }
+        )
+
+        # when
+        data = generate_toy2d_dataset(config, self.device)
+
+        # then
+        pair_active_mask = data["pair_active_mask_train"].to(dtype=torch.int64)
+        active_counts = pair_active_mask.sum(dim=1)
+        self.assertTrue(bool((active_counts == 2).all()))
+
+    def test_active_pairs_per_sample_raises_when_out_of_range(self) -> None:
+        # given
+        config = self._build_config({"num_pairs": 3, "active_pairs_per_sample": 4})
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = generate_toy2d_dataset(config, self.device)
 
     def test_within_pair_correlation_matches_expected_values(self) -> None:
         # given
