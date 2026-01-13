@@ -120,6 +120,43 @@ def _resolve_multi_seed_base_run_id(
         suffix += 1
 
 
+def _resolve_multi_run_base_run_id(
+    experiment_config: Toy2DExperimentConfig,
+    run_id_suffixes: List[str],
+) -> str:
+    requested_run_id = experiment_config.run_id
+    base_run_id = requested_run_id or _generate_run_id()
+    run_parent = _resolve_run_parent_dir(experiment_config.output_dir)
+
+    def any_run_dir_exists(candidate_base_run_id: str) -> bool:
+        for suffix in run_id_suffixes:
+            candidate_run_dir = os.path.join(
+                run_parent, f"{candidate_base_run_id}{suffix}"
+            )
+            if os.path.exists(candidate_run_dir):
+                return True
+        return False
+
+    if requested_run_id is not None:
+        if any_run_dir_exists(base_run_id):
+            raise ValueError(
+                "At least one requested run directory already exists for the provided "
+                "multi-run configuration. Choose a different run_id or remove the "
+                f"existing run(s) under: {run_parent}"
+            )
+        return base_run_id
+
+    if not any_run_dir_exists(base_run_id):
+        return base_run_id
+
+    suffix = 1
+    while True:
+        candidate_base_run_id = f"{base_run_id}_{suffix}"
+        if not any_run_dir_exists(candidate_base_run_id):
+            return candidate_base_run_id
+        suffix += 1
+
+
 def _persist_run_config(config: Toy2DExperimentConfig, run_dir: str) -> None:
     config_path = os.path.join(run_dir, "config.json")
     with open(config_path, "w") as f:
@@ -489,17 +526,57 @@ def run_toy_model_geometry_validation(
     experiment_config: Toy2DExperimentConfig,
 ) -> str | List[str]:
     seed_value = experiment_config.data.seed
-    if isinstance(seed_value, list):
-        seeds = [int(seed) for seed in seed_value]
-        base_run_id = _resolve_multi_seed_base_run_id(experiment_config, seeds)
+    active_pairs_value = experiment_config.data.active_pairs_per_sample
+
+    seed_is_list = isinstance(seed_value, list)
+    active_pairs_is_list = isinstance(active_pairs_value, list)
+    if seed_is_list or active_pairs_is_list:
+        seeds = [int(seed) for seed in (seed_value if seed_is_list else [seed_value])]
+        active_pairs_list = (
+            [int(value) for value in active_pairs_value]
+            if active_pairs_is_list
+            else [active_pairs_value]
+        )
+
+        run_id_suffixes: List[str] = []
+        for seed in seeds:
+            seed_suffix = f"_seed{seed}" if seed_is_list else ""
+            for active_pairs_per_sample in active_pairs_list:
+                ap_suffix = (
+                    f"_ap{active_pairs_per_sample}"
+                    if active_pairs_is_list
+                    else ""
+                )
+                run_id_suffixes.append(f"{seed_suffix}{ap_suffix}")
+
+        base_run_id = (
+            _resolve_multi_seed_base_run_id(experiment_config, seeds)
+            if seed_is_list and not active_pairs_is_list
+            else _resolve_multi_run_base_run_id(experiment_config, run_id_suffixes)
+        )
         run_dirs: List[str] = []
         for seed in seeds:
-            per_seed_config = replace(
-                experiment_config,
-                data=replace(experiment_config.data, seed=seed),
-                run_id=f"{base_run_id}_seed{seed}",
-            )
-            run_dirs.append(run_toy_model_geometry_validation(per_seed_config))
+            seed_suffix = f"_seed{seed}" if seed_is_list else ""
+            for active_pairs_per_sample in active_pairs_list:
+                ap_suffix = (
+                    f"_ap{active_pairs_per_sample}"
+                    if active_pairs_is_list
+                    else ""
+                )
+                per_run_config = replace(
+                    experiment_config,
+                    data=replace(
+                        experiment_config.data,
+                        seed=int(seed),
+                        active_pairs_per_sample=(
+                            None
+                            if active_pairs_per_sample is None
+                            else int(active_pairs_per_sample)
+                        ),
+                    ),
+                    run_id=f"{base_run_id}{seed_suffix}{ap_suffix}",
+                )
+                run_dirs.append(run_toy_model_geometry_validation(per_run_config))
         return run_dirs
 
     device = _resolve_device(experiment_config.device)

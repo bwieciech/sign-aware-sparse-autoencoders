@@ -17,7 +17,13 @@
       6,
       7,
       8,
-      9
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
     ],
     "num_train": 100000,
     "num_val": 10000,
@@ -57,8 +63,8 @@
       "d_hidden": 16,
       "sparsity_coeff": 0.001,
       "sparsity_coeff_warmup_epochs": 10,
-      "learning_rate": 0.0003,
-      "num_epochs": 100,
+      "learning_rate": 0.0001,
+      "num_epochs": 256,
       "batch_size": 1024,
       "resample_latents_epochs": 10.0,
       "adam_betas": [
@@ -76,8 +82,8 @@
       "symmetric_magnitude": true,
       "sparsity_coeff": 0.001,
       "sparsity_coeff_warmup_epochs": 10,
-      "learning_rate": 0.0003,
-      "num_epochs": 100,
+      "learning_rate": 0.0001,
+      "num_epochs": 256,
       "batch_size": 1024,
       "resample_latents_epochs": 10.0,
       "adam_betas": [
@@ -95,8 +101,8 @@
       "symmetric_magnitude": true,
       "sparsity_coeff": 0.001,
       "sparsity_coeff_warmup_epochs": 10,
-      "learning_rate": 0.0003,
-      "num_epochs": 100,
+      "learning_rate": 0.0001,
+      "num_epochs": 256,
       "batch_size": 1024,
       "resample_latents_epochs": 10.0,
       "adam_betas": [

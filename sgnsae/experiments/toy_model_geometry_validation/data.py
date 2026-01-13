@@ -254,6 +254,11 @@ def generate_toy2d_dataset(
             "seed must be a single integer when generating toy data; "
             "resolve multi-seed configurations in the runner."
         )
+    if isinstance(config.active_pairs_per_sample, list):
+        raise ValueError(
+            "active_pairs_per_sample must be a single integer or null when generating toy data; "
+            "resolve multi-run configurations in the runner."
+        )
     seed = int(config.seed)
     set_random_seed(seed)
     generator = _create_cpu_generator(seed)

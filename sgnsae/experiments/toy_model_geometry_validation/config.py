@@ -89,7 +89,7 @@ class Toy2DDataConfig:
     num_pairs: int
     direction_mode: Literal["uniform", "random"] = "uniform"
     pair_axis_active_prob: float = 0.2
-    active_pairs_per_sample: int | None = None
+    active_pairs_per_sample: int | List[int] | None = None
     pair_feature_prob: float = 0.5
     pair_correlation: Optional[float] = -1.0
     pair_correlation_grid: Optional[List[float]] = None
@@ -127,6 +127,39 @@ class Toy2DDataConfig:
             self.pair_axis_active_prob, "pair_axis_active_prob"
         )
         _validate_open_unit_interval(self.pair_feature_prob, "pair_feature_prob")
+
+        if isinstance(self.active_pairs_per_sample, list):
+            if not self.active_pairs_per_sample:
+                raise ValueError(
+                    "active_pairs_per_sample must be a non-empty list when provided as a list."
+                )
+            for index, value in enumerate(self.active_pairs_per_sample):
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise ValueError(
+                        "active_pairs_per_sample values must be integers; received "
+                        f"active_pairs_per_sample[{index}]={value}."
+                    )
+                if value < 0 or value > self.num_pairs:
+                    raise ValueError(
+                        "active_pairs_per_sample values must be within [0, num_pairs]; received "
+                        f"active_pairs_per_sample[{index}]={value} for num_pairs={self.num_pairs}."
+                    )
+        elif self.active_pairs_per_sample is not None:
+            if (
+                not isinstance(self.active_pairs_per_sample, int)
+                or isinstance(self.active_pairs_per_sample, bool)
+            ):
+                raise ValueError(
+                    "active_pairs_per_sample must be an integer or null; received "
+                    f"{self.active_pairs_per_sample}."
+                )
+            if self.active_pairs_per_sample < 0 or self.active_pairs_per_sample > int(
+                self.num_pairs
+            ):
+                raise ValueError(
+                    "active_pairs_per_sample must be within [0, num_pairs]; received "
+                    f"{self.active_pairs_per_sample} for num_pairs={self.num_pairs}."
+                )
 
         if self.pair_correlation_grid is None:
             if self.pair_correlation is None:

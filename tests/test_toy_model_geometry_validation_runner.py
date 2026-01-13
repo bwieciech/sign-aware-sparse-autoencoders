@@ -10,6 +10,12 @@ from sgnsae.experiments.toy_model_geometry_validation import runner as runner_mo
 
 
 class TestToyModelGeometryValidationRunner(unittest.TestCase):
+    def _stub_leaf_experiment(self, _config: Any, run_dir: str) -> Dict[str, Any]:
+        summary_path = os.path.join(run_dir, "comparison_summary.json")
+        with open(summary_path, "w") as f:
+            json.dump({"status": "stub"}, f)
+        return {"status": "stub"}
+
     def _build_raw_config(self, output_dir: str, run_id: str | None) -> Dict[str, Any]:
         return {
             "output_dir": output_dir,
@@ -278,6 +284,249 @@ class TestToyModelGeometryValidationRunner(unittest.TestCase):
                     persisted_config = json.load(f)
                 self.assertEqual(persisted_config["run_id"], expected_run_id)
                 self.assertEqual(persisted_config["data"]["seed"], expected_seed)
+
+    def test_run_experiment_supports_active_pairs_per_sample_list(self) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            raw_config["data"]["seed"] = 1
+            raw_config["data"]["num_pairs"] = 4
+            raw_config["data"]["active_pairs_per_sample"] = [1, 2, 3]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module,
+                "_run_leaf_experiment",
+                side_effect=self._stub_leaf_experiment,
+            ), patch.object(runner_module, "persist_environment_metadata", return_value=None):
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertIsInstance(run_dirs, list)
+            expected_dirs = [
+                os.path.join(tmpdir, "toy_model_geometry_validation", "unittest_run_ap1"),
+                os.path.join(tmpdir, "toy_model_geometry_validation", "unittest_run_ap2"),
+                os.path.join(tmpdir, "toy_model_geometry_validation", "unittest_run_ap3"),
+            ]
+            self.assertEqual(run_dirs, expected_dirs)
+            for run_dir, expected_ap, expected_run_id in zip(
+                run_dirs,
+                [1, 2, 3],
+                ["unittest_run_ap1", "unittest_run_ap2", "unittest_run_ap3"],
+            ):
+                with open(os.path.join(run_dir, "config.json"), "r") as f:
+                    persisted_config = json.load(f)
+                self.assertEqual(persisted_config["run_id"], expected_run_id)
+                self.assertEqual(persisted_config["data"]["seed"], 1)
+                self.assertEqual(
+                    persisted_config["data"]["active_pairs_per_sample"], expected_ap
+                )
+
+    def test_run_experiment_supports_seed_and_active_pairs_per_sample_lists(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            raw_config["data"]["seed"] = [0, 1]
+            raw_config["data"]["num_pairs"] = 4
+            raw_config["data"]["active_pairs_per_sample"] = [1, 2, 3]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module,
+                "_run_leaf_experiment",
+                side_effect=self._stub_leaf_experiment,
+            ), patch.object(runner_module, "persist_environment_metadata", return_value=None):
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertIsInstance(run_dirs, list)
+            expected_dirs = [
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed0_ap1"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed0_ap2"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed0_ap3"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed1_ap1"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed1_ap2"
+                ),
+                os.path.join(
+                    tmpdir, "toy_model_geometry_validation", "unittest_run_seed1_ap3"
+                ),
+            ]
+            self.assertEqual(run_dirs, expected_dirs)
+            expected_pairs = [
+                (0, 1),
+                (0, 2),
+                (0, 3),
+                (1, 1),
+                (1, 2),
+                (1, 3),
+            ]
+            for run_dir, (expected_seed, expected_ap) in zip(run_dirs, expected_pairs):
+                with open(os.path.join(run_dir, "config.json"), "r") as f:
+                    persisted_config = json.load(f)
+                self.assertEqual(persisted_config["data"]["seed"], expected_seed)
+                self.assertEqual(
+                    persisted_config["data"]["active_pairs_per_sample"], expected_ap
+                )
+
+    def test_run_experiment_seed_list_with_scalar_active_pairs_per_sample_keeps_seed_suffix(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            raw_config["data"]["seed"] = [0, 1]
+            raw_config["data"]["active_pairs_per_sample"] = 1
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module,
+                "_run_leaf_experiment",
+                side_effect=self._stub_leaf_experiment,
+            ), patch.object(runner_module, "persist_environment_metadata", return_value=None):
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertEqual(
+                run_dirs,
+                [
+                    os.path.join(
+                        tmpdir, "toy_model_geometry_validation", "unittest_run_seed0"
+                    ),
+                    os.path.join(
+                        tmpdir, "toy_model_geometry_validation", "unittest_run_seed1"
+                    ),
+                ],
+            )
+            with open(os.path.join(run_dirs[1], "config.json"), "r") as f:
+                persisted_config = json.load(f)
+            self.assertEqual(persisted_config["run_id"], "unittest_run_seed1")
+            self.assertEqual(persisted_config["data"]["seed"], 1)
+            self.assertEqual(persisted_config["data"]["active_pairs_per_sample"], 1)
+
+    def test_run_experiment_active_pairs_per_sample_list_raises_when_run_dir_exists(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id="unittest_run")
+            raw_config["data"]["active_pairs_per_sample"] = [1, 2]
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            existing_dir = os.path.join(
+                tmpdir, "toy_model_geometry_validation", "unittest_run_ap2"
+            )
+            os.makedirs(existing_dir, exist_ok=True)
+
+            # when & then
+            with self.assertRaises(ValueError):
+                _ = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+    def test_run_experiment_active_pairs_per_sample_list_suffixes_generated_run_id_on_collision(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id=None)
+            raw_config["data"]["seed"] = 1
+            raw_config["data"]["active_pairs_per_sample"] = [1]
+            raw_config["device"] = "cpu"
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module,
+                "_generate_run_id",
+                return_value="fixed_id",
+            ), patch.object(
+                runner_module,
+                "_run_leaf_experiment",
+                side_effect=self._stub_leaf_experiment,
+            ), patch.object(runner_module, "persist_environment_metadata", return_value=None):
+                run_parent = os.path.join(tmpdir, "toy_model_geometry_validation")
+                os.makedirs(os.path.join(run_parent, "fixed_id_ap1"), exist_ok=True)
+                os.makedirs(os.path.join(run_parent, "fixed_id_1_ap1"), exist_ok=True)
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertEqual(
+                run_dirs,
+                [
+                    os.path.join(
+                        tmpdir, "toy_model_geometry_validation", "fixed_id_2_ap1"
+                    )
+                ],
+            )
+
+    def test_run_experiment_active_pairs_per_sample_list_uses_generated_run_id_when_no_collision(
+        self,
+    ) -> None:
+        # given
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_config = self._build_raw_config(tmpdir, run_id=None)
+            raw_config["data"]["seed"] = 1
+            raw_config["data"]["active_pairs_per_sample"] = [1]
+            raw_config["device"] = "cpu"
+            config_path = os.path.join(tmpdir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(raw_config, f)
+
+            # when
+            with patch.object(
+                runner_module,
+                "_generate_run_id",
+                return_value="fixed_id",
+            ), patch.object(
+                runner_module,
+                "_run_leaf_experiment",
+                side_effect=self._stub_leaf_experiment,
+            ), patch.object(runner_module, "persist_environment_metadata", return_value=None):
+                run_dirs = runner_module.run_toy_model_geometry_validation_experiment(
+                    config_path
+                )
+
+            # then
+            self.assertEqual(
+                run_dirs,
+                [
+                    os.path.join(
+                        tmpdir, "toy_model_geometry_validation", "fixed_id_ap1"
+                    )
+                ],
+            )
 
     def test_run_experiment_seed_list_raises_when_any_requested_run_dir_exists(
         self,

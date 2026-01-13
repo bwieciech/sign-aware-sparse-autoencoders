@@ -220,6 +220,62 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
                 **{**base_kwargs, "direction_mode": "not_a_mode"}
             )
 
+    def test_data_config_accepts_active_pairs_per_sample_as_list(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when
+        config = config_module.Toy2DDataConfig(
+            **{**base_kwargs, "active_pairs_per_sample": [0, 1, 2]}
+        )
+
+        # then
+        self.assertEqual(config.active_pairs_per_sample, [0, 1, 2])
+
+    def test_data_config_rejects_empty_active_pairs_per_sample_list(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(
+                **{**base_kwargs, "active_pairs_per_sample": []}
+            )
+
+    def test_data_config_rejects_non_int_active_pairs_per_sample_list(self) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(
+                **{**base_kwargs, "active_pairs_per_sample": [0, "1"]}
+            )
+
+    def test_data_config_rejects_active_pairs_per_sample_list_out_of_range(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(
+                **{**base_kwargs, "active_pairs_per_sample": [3]}
+            )
+
+    def test_data_config_rejects_active_pairs_per_sample_when_not_int_or_null(
+        self,
+    ) -> None:
+        # given
+        base_kwargs = self._build_base_data_config()
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.Toy2DDataConfig(
+                **{**base_kwargs, "active_pairs_per_sample": "1"}
+            )
+
     def test_data_config_accepts_seed_list(self) -> None:
         # given
         base_kwargs = self._build_base_data_config()

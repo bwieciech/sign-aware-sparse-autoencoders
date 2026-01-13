@@ -166,7 +166,26 @@ class TestToyModelGeometryValidationDataGeneration(unittest.TestCase):
 
     def test_active_pairs_per_sample_raises_when_out_of_range(self) -> None:
         # given
-        config = self._build_config({"num_pairs": 3, "active_pairs_per_sample": 4})
+        overrides = {"num_pairs": 3, "active_pairs_per_sample": 4}
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = self._build_config(overrides)
+
+    def test_generate_dataset_raises_when_active_pairs_per_sample_is_list(self) -> None:
+        # given
+        config = self._build_config({"active_pairs_per_sample": [1, 2]})
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = generate_toy2d_dataset(config, self.device)
+
+    def test_generate_dataset_raises_when_active_pairs_per_sample_exceeds_num_pairs_at_runtime(
+        self,
+    ) -> None:
+        # given
+        config = self._build_config({"num_pairs": 4, "active_pairs_per_sample": 3})
+        config.num_pairs = 2
 
         # when & then
         with self.assertRaises(ValueError):
