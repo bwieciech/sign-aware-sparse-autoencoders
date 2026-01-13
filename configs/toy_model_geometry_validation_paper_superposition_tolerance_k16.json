@@ -1,7 +1,7 @@
 {
   "output_dir": "assets/tmp_toy_model_geometry_validation_runs",
   "device": "auto",
-  "run_id": "toy_model_geometry_validation_superposition_tolerance_k16_ap2",
+  "run_id": "toy_model_geometry_validation_superposition_tolerance_k16",
   "verbose": true,
   "log_every_n_steps": 1000,
   "log_every_n_epochs": 1,
