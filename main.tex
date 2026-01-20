@@ -372,10 +372,26 @@ We treat isotropic coordinate anomalies as a control that highlights non-identif
 This protocol replicates the setup of \cite{elhage2022toy} to provide visual and geometric confirmation that the Sign-Aware SAE correctly identifies and consolidates anticorrelated subspaces.
 
 \paragraph{Data Geometry.}
-We generate $k$ pairs of features embedded in $\R^2$ (the "unit circle" visualization). Features within a pair are strictly anticorrelated (mutually exclusive). We train models with dictionary width $M=k$ (Sign-Aware) and $M=2k$ (Baseline), so that in the ideal case the baseline allocates one latent per feature, while the Sign-Aware model allocates one latent per pair.
+We generate $k$ pairs of features embedded in $\R^2$ (the "unit circle" visualization), with paired directions that are antipodal on the unit circle.
+For the qualitative visualizations below, we use the mutually exclusive setting ($\rho=-1$) so that exactly one member of each pair can be active at a time.
+We train models with dictionary width $M=k$ (Sign-Aware) and $M=2k$ (Baseline), so that in the ideal case the baseline allocates one latent per feature, while the Sign-Aware model allocates one latent per pair.
+
+\paragraph{Why Sign-Aware Consolidates Antipodal Pairs.}
+In the antipodal construction, each ground-truth pair corresponds to a single axis direction $u_j \in \R^2$, with two features at directions $\pm u_j$.
+In the mutually exclusive setting ($\rho=-1$), an ideal Sign-Aware SAE can represent the entire pair using a single decoder column aligned with $u_j$:
+positive activations correspond to the $+u_j$ feature and negative activations correspond to the $-u_j$ feature.
+In contrast, a non-negative SAE cannot use the sign of activations to flip direction, so representing both $\pm u_j$ requires allocating two separate decoder columns, one per feature direction.
 
 \paragraph{Visualization A: The Unit Circle.}
 We project the columns of the decoder $D$ onto the 2D data plane and plot them on the unit circle.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics{protocol_c_unit_circle_baseline_2k_seed0.png}
+    \includegraphics{protocol_c_unit_circle_sign_aware_k_seed0.png}
+    \caption{Protocol C qualitative geometry: in the mutually exclusive antipodal setting ($\rho=-1$), a non-negative baseline at width $M=2k$ learns one decoder direction per feature, while the Sign-Aware SAE at width $M=k$ learns one direction per pair axis and uses activation sign to distinguish the two antipodal features.}
+    \label{fig:protocol_c_unit_circle}
+\end{figure}
 
 \begin{itemize}
     \item \textbf{Baseline Expectation:} Two distinct vectors at $180^\circ$ separation (antipodal) for each feature pair.
@@ -385,23 +401,59 @@ We project the columns of the decoder $D$ onto the 2D data plane and plot them o
 \paragraph{Visualization B: The Bi-Jump Histogram.}
 We collect activations for a single trained latent over the dataset and plot the histogram of $a_i(x)$.
 
+\begin{figure}[t]
+    \centering
+    \includegraphics{protocol_c_bijump_hist_sign_aware_k_seed0_logy.png}
+    \caption{Bi-jump histogram for a representative Sign-Aware latent in Protocol C. The distribution exhibits two symmetric modes, consistent with a single latent representing an antipodal pair via positive vs negative activations.}
+    \label{fig:protocol_c_bijump}
+\end{figure}
+
 \begin{itemize}
     \item \textbf{Sign-Aware Expectation:} The histogram should reveal a tri-modal distribution: a large mass exactly at zero (the dead zone $[-\delta_i^-, \delta_i^+]$), a lobe of positive activations, and a lobe of negative activations. This visually confirms the functionality of the Bi-Jump-ReLU activation function defined in \cref{eq:bi_jump_relu}.
 \end{itemize}
 
-\paragraph{Quantitative Metric: Pair Consolidation Rate.}
-We vary the correlation coefficient $\rho_{j_1 j_2}$ between feature pairs from $-1$ (perfectly anticorrelated) to $0$ (uncorrelated), and measure the \textit{Pair Consolidation Rate}: the fraction of ground-truth pairs represented by a single latent.
+\paragraph{Quantitative Sweep: Superposition Tolerance.}
+To obtain a transition-like quantitative curve, we fix the mutually exclusive antipodal construction ($\rho=-1$) and vary the amount of superposition by changing the number of active pairs per sample (denoted $a$).
+As $a$ increases, multiple pairs contribute to each observation, and the model must represent signed pair membership in the presence of superposed features.
+
+\paragraph{Quantitative Metric: Signed Recoverability.}
+For each ground-truth pair axis $u_j$, we select the decoder column $D_{:,i}$ with maximum absolute cosine similarity to $u_j$ and define an oriented activation $\tilde a_i(x) = \mathrm{sign}(\langle D_{:,i}, u_j\rangle)\, a_i(x)$.
+We then compute the Pearson correlation between $\tilde a_i(x)$ and the signed ground-truth coefficient for that pair, over test samples where the pair is active.
+We report the mean of this correlation across pairs as a continuous measure of signed recoverability.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics{protocol_c_superposition_k16_mean_activation_corr.png}
+    \caption{Protocol C quantitative curve (superposition tolerance): signed recoverability decreases sharply as the number of active pairs per sample increases. We plot mean best-candidate activation correlation (mean $\pm$ SEM over seeds).}
+    \label{fig:protocol_c_superposition_recoverability}
+\end{figure}
+
+\paragraph{Thresholded Metric: Pair Consolidation Rate.}
+We also report the \textit{Pair Consolidation Rate}, a stricter, thresholded variant of the above metric: the fraction of ground-truth pairs represented by a single latent that is both axis-aligned and sign-consistent.
 
 We define that a ground-truth pair $(j_1,j_2)$ is \emph{consolidated} by latent $i$ if:
 \begin{itemize}
-    \item The decoder column $D_{:,i}$ has cosine similarity above a threshold $\tau$ (e.g., $\tau = 0.9$) with both feature directions $u_{j_1}$ and $u_{j_2}$, and
-    \item The sign of $a_i(x)$ across the dataset is positively correlated with the ground-truth feature sign $s_{j_1}$ when $f_{j_1}$ is active and negatively correlated when $f_{j_2}$ is active.
+    \item The decoder column $D_{:,i}$ has \emph{absolute} cosine similarity above a threshold $\tau$ (e.g., $\tau = 0.9$) with the pair axis (equivalently, with both antipodal directions), and
+    \item The oriented activation $\tilde a_i(x)$ is positively correlated with the signed ground-truth coefficient for the pair, and
+    \item The sign of $\tilde a_i(x)$ agrees with the ground-truth sign in both regimes (when $+u_j$ is active vs when $-u_j$ is active).
 \end{itemize}
 The Pair Consolidation Rate is the fraction of ground-truth pairs for which there exists at least one latent satisfying these conditions.
 
 \begin{itemize}
-    \item \textbf{Prediction:} We expect a phase-transition-like behavior as a function of $\rho_{j_1 j_2}$. As $\rho_{j_1 j_2} \to -1$, the Sign-Aware SAE should abruptly shift from using two latents to using one, driving the Pair Consolidation Rate toward 1. As $\rho_{j_1 j_2} \to 0$, consolidation should become suboptimal, and the model should naturally revert to using distinct latents, reducing the consolidation rate.
+    \item \textbf{Observation:} Signed recoverability shows a clear transition-like degradation with superposition (Fig.~\ref{fig:protocol_c_superposition_recoverability}). The overcomplete Sign-Aware setting ($M=2k$) degrades faster, consistent with symmetry between one-latent and two-latent solutions.
+    \item \textbf{Observation:} The thresholded Pair Consolidation Rate collapses rapidly as superposition increases, indicating that sign-consistent single-latent representations become unreliable under strong interference.
 \end{itemize}
+
+\paragraph{Robustness Sweep: Within-Pair Correlation.}
+As a robustness check, we also sweep the within-pair correlation $\rho$ from $-1$ (mutually exclusive) to $0$ (independent) at fixed $a=1$ and measure the Pair Consolidation Rate.
+This sweep produces a gradual degradation rather than a sharp transition, and is best interpreted as a robustness check rather than a phase transition.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics{protocol_c_corr_sweep_k8_pair_consolidation.png}
+    \caption{Robustness sweep: Pair Consolidation Rate vs within-pair correlation $\rho$ (mean $\pm$ SEM over seeds).}
+    \label{fig:protocol_c_corr_sweep}
+\end{figure}
 
 %----------------------------------------------------------------------------------------
 %	6. RESULTS
