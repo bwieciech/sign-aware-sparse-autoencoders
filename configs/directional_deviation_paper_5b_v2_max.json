@@ -1,7 +1,7 @@
 {
   "output_dir": "assets/directional_deviation_paper/5b_feature_direction_v2_max",
   "device": "auto",
-  "verbose": false,
+  "verbose": true,
   "log_every_n_steps": 1000,
   "log_every_n_epochs": 1,
   "coverage_recall_target": 0.8,

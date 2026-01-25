@@ -53,14 +53,14 @@ Sparse Autoencoders (SAEs) have emerged as a primary tool for extracting interpr
 
 Dictionary learning, particularly via Sparse Autoencoders (SAEs), aims to decompose the dense internal activations of neural networks into sparse, interpretable linear combinations of feature directions \cite{cunningham2023sparse, bricken2023towards}. A standard SAE approximates an activation vector $x \in \R^n$ as $\hat{x} = D f(x) + b$, where $f(x)$ is a sparse vector of coefficients.
 
-A pervasive limitation in current SAE architectures is the non-negativity constraint imposed by the ReLU activation function: $f_i(x) \ge 0$. While valid for many unipolar concepts, this constraint is inductive misalignment for features that represent \textit{anticorrelated} opposites along a single linear subspace---such as sentiment (positive/negative), physical state (hot/cold), or control signals (acceleration/braking). To represent such a subspace, a standard SAE must allocate two distinct latent atoms, $d$ and $-d$, which are mutually exclusive in activation but redundant in geometry. This redundancy inflates the dictionary size required to achieve a given reconstruction fidelity.
+A pervasive limitation in current SAE architectures is the non-negativity constraint imposed by the ReLU activation function: $f_i(x) \ge 0$. While valid for many unipolar concepts, this constraint is inductive misalignment for features that represent \textit{anticorrelated} opposites along a single linear subspace, such as sentiment (positive/negative), physical state (hot/cold), or control signals (acceleration/braking). To represent such a subspace, a standard SAE must allocate two distinct latent atoms, $d$ and $-d$, which are mutually exclusive in activation but redundant in geometry. This redundancy inflates the dictionary size required to achieve a given reconstruction fidelity.
 
 Building on the recent success of Gated SAEs \cite{rajamanoharan2024gated}, which decouple feature detection from magnitude estimation to resolve standard $\ell_1$ shrinkage, we introduce the \textit{Sign-Aware Gated SAE}. Our contributions are:
 
 \begin{enumerate}
     \item \textbf{The Bi-Jump-ReLU Activation:} We formalize a signed activation function with a learnable dead zone and asymmetric scaling, allowing a single latent to model "two-sided" evidence.
     \item \textbf{Theoretical Efficiency Analysis:} We prove that our architecture reduces the dictionary width required to model anticorrelated pairs by a factor of 2, with a net parameter savings whenever such pairs exceed roughly $0.2\%$ of the feature set in a 4096-dimensional layer (and an even smaller fraction at larger widths).
-    \item \textbf{Protocol Design:} We delineate three experimental protocols---including a reproduction of the geometry from \textit{Toy Models of Superposition} \cite{elhage2022toy}---to rigorously benchmark the approach.
+    \item \textbf{Protocol Design:} We delineate three experimental protocols, including a reproduction of the geometry from \textit{Toy Models of Superposition} \cite{elhage2022toy}, to rigorously benchmark the approach.
 \end{enumerate}
 
 %----------------------------------------------------------------------------------------
@@ -571,22 +571,31 @@ We then evaluate feature-direction anomalies aligned to operational axes derived
 
 \begin{table}[t]
     \centering
-    \caption{Protocol B results for feature-direction anomalies (mean over three seeds, target FPR 1\%). Directions: $M=128$ selected by top-$\mathrm{std}(\pi)$ from a reference Sign-Aware model; per-direction inputs scaled by a fixed-$\Delta\pi$ rule. Coverage denotes the fraction of directions with both-direction recall $\ge 0.8$.}
+    \caption{Protocol B results for feature-direction anomalies (mean over 16 seeds, target FPR 1\%). Directions: $M=128$ selected by top-$\mathrm{std}(\pi)$ from a reference Sign-Aware model; per-direction inputs scaled by a fixed-$\Delta\pi$ rule. Coverage denotes the fraction of directions with both-direction recall $\ge 0.8$.}
     \label{tab:protocol_b_feature_direction}
     \small\begin{tabular}{lcccc}
         \toprule
         Width $H$ & Pooling & Sign-Aware Recall (high) & Sign-Aware Recall (low) & Coverage \\
         \midrule
-        128 & max & 0.998 & 0.997 & 1.00 \\
+        128 & max & 0.997 & 0.997 & 1.00 \\
         256 & max & 0.995 & 0.995 & 1.00 \\
-        512 & max & 0.992 & 0.990 & 1.00 \\
+        512 & max & 0.992 & 0.991 & 1.00 \\
         \midrule
-        512 & top-$k$ ($k=4$) & 0.934 & 0.934 & 1.00 \\
+        512 & top-$k$ ($k=4$) & 0.933 & 0.933 & 1.00 \\
         \bottomrule
     \end{tabular}
 \end{table}
 
 Across all widths, the Sign-Aware model achieves near-saturated directional recall and full direction coverage with max pooling (\cref{tab:protocol_b_feature_direction}). In contrast, non-sign-aware baselines remain near chance on this evaluation (directional recall close to the calibrated FPR and 0 coverage), consistent with their one-sided evidence and the difficulty of representing both tails of a direction efficiently under a fixed latent budget.
+
+For comparison, an earlier feature-direction variant without strength control and using global sum pooling degrades sharply at larger widths: at $H=512$, the Sign-Aware model drops to roughly $0.67$ directional recall with near-zero coverage (16 seeds), motivating the fixed-$\Delta\pi$ scaling and localized pooling used above. \cref{fig:protocol_b_h512_min_recall_cdf} visualizes this effect at $H=512$ by plotting the empirical CDF of per-direction two-tailed recall.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics{protocol_b_h512_min_recall_cdf_sign_aware.png}
+    \caption{Protocol B (feature-direction anomalies) at $H=512$: empirical CDF of per-direction two-tailed recall, $\min(\mathrm{recall}_{\mathrm{high}}, \mathrm{recall}_{\mathrm{low}})$, across directions and seeds. The revised protocol with fixed-$\Delta\pi$ scaling and localized pooling concentrates above the 0.8 coverage threshold, while the earlier sum pooling variant degrades substantially.}
+    \label{fig:protocol_b_h512_min_recall_cdf}
+\end{figure}
 
 
 %----------------------------------------------------------------------------------------
