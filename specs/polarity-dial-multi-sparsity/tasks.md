@@ -97,7 +97,7 @@
 
 ## 4) Add seed-level per-model loss-vs-sparsity plots (list mode)
 
-- [ ] 4.1 Add plotting utilities for per-model multi-sparsity summaries
+- [x] 4.1 Add plotting utilities for per-model multi-sparsity summaries
   - Extend `sgnsae/experiments/polarity_dial/plotting.py` with functions that write, per model:
     - sparsity loss vs coefficient
     - sparsity loss vs log(coefficient)
@@ -108,7 +108,7 @@
   - Write outputs under `<seed_run_dir>/plots/multi_sparsity/<model_name>/`.
   - Requirements: 5.1, 5.2, 5.3
 
-- [ ] 4.2 Invoke these plots from the Protocol A runner in list mode
+- [x] 4.2 Invoke these plots from the Protocol A runner in list mode
   - For each list-mode model, use the final-epoch per-instance metrics to populate the plot y-values.
   - Requirements: 5.1, 5.3
 

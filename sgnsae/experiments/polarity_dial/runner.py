@@ -30,6 +30,7 @@ from sgnsae.experiments.polarity_dial.plotting import (
     plot_gamma_comparison,
     plot_gamma_histograms,
     plot_gamma_strip,
+    plot_multi_sparsity_loss_summaries,
     plot_mse_vs_l0_tradeoff,
     plot_training_loss,
 )
@@ -338,7 +339,9 @@ def _run_multi_sparsity_subruns(
     subrun_count = _resolve_subrun_count(experiment_config.models)
     trained_by_model_name: Dict[str, Dict[str, Any]] = {}
     for model_config in experiment_config.models:
-        model_seed = _stable_model_seed(int(experiment_config.data.seed), model_config.name)
+        model_seed = _stable_model_seed(
+            int(experiment_config.data.seed), model_config.name
+        )
         set_random_seed(model_seed)
         dataloader_generator = torch.Generator().manual_seed(model_seed)
         training_output = run_training_for_variant(
@@ -353,6 +356,16 @@ def _run_multi_sparsity_subruns(
 
     num_train = int(data["x_train"].shape[0])
     input_dim = int(data["x_train"].shape[1])
+    for model_config in experiment_config.models:
+        if not _model_uses_list_sparsity(model_config):
+            continue
+        training_metrics = trained_by_model_name[model_config.name]["training_metrics"]
+        plot_multi_sparsity_loss_summaries(
+            training_metrics=training_metrics,
+            model_name=model_config.name,
+            seed_run_dir=seed_run_dir,
+            sparsity_coeff_list=[float(value) for value in model_config.sparsity_coeff],
+        )
 
     for coeff_index in range(subrun_count):
         subrun_dir = os.path.join(seed_run_dir, str(coeff_index))
@@ -365,7 +378,9 @@ def _run_multi_sparsity_subruns(
             model_config.name: model_config for model_config in experiment_config.models
         }
         for model_config in experiment_config.models:
-            sparsity_coeff = _resolve_sparsity_coeff_for_index(model_config, coeff_index)
+            sparsity_coeff = _resolve_sparsity_coeff_for_index(
+                model_config, coeff_index
+            )
             if sparsity_coeff is None:
                 continue
             subrun_models.append(replace(model_config, sparsity_coeff=sparsity_coeff))
@@ -384,7 +399,9 @@ def _run_multi_sparsity_subruns(
             trained = trained_by_model_name[model_config.name]
             training_metrics = trained["training_metrics"]
             if _model_uses_list_sparsity(base_model_config):
-                steps_per_epoch = _steps_per_epoch(num_train, base_model_config.batch_size)
+                steps_per_epoch = _steps_per_epoch(
+                    num_train, base_model_config.batch_size
+                )
                 model = slice_trained_model_instance(
                     trained["model"],
                     base_model_config,

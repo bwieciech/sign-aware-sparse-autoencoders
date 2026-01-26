@@ -347,3 +347,148 @@ def plot_asymmetry_sweep_calibration(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     plt.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
+
+
+def _ensure_multi_sparsity_plots_dir(seed_run_dir: str, model_name: str) -> str:
+    plots_dir = os.path.join(seed_run_dir, "plots", "multi_sparsity", model_name)
+    os.makedirs(plots_dir, exist_ok=True)
+    return plots_dir
+
+
+def _final_epoch_values_by_instance(
+    metric_by_instance: List[List[float]],
+) -> List[float]:
+    final_values: List[float] = []
+    for instance_values in metric_by_instance:
+        final_values.append(
+            float(np.nan) if not instance_values else float(instance_values[-1])
+        )
+    return final_values
+
+
+def _sort_xy(
+    x_values: List[float], y_values: List[float]
+) -> Tuple[List[float], List[float]]:
+    ordering = np.argsort(np.array(x_values, dtype=np.float64))
+    x_sorted = [float(x_values[idx]) for idx in ordering]
+    y_sorted = [float(y_values[idx]) for idx in ordering]
+    return x_sorted, y_sorted
+
+
+def _plot_metric_vs_sparsity(
+    x_values: List[float],
+    y_values: List[float],
+    x_label: str,
+    y_label: str,
+    title: str,
+    output_path: str,
+    color: str,
+) -> None:
+    plt.figure(figsize=(7, 4))
+    plt.plot(x_values, y_values, marker="o", color=color)
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.grid(axis="y", color="#e0e0e0")
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
+def _final_metric_values_for_sparsity_coeff_sweep(
+    training_metrics: Dict[str, Any],
+    scalar_metric_key: str,
+    metric_by_instance_key: str,
+    n_instances: int,
+) -> List[float]:
+    if metric_by_instance_key in training_metrics:
+        metric_by_instance = training_metrics[metric_by_instance_key]
+        if not isinstance(metric_by_instance, list):
+            raise TypeError(
+                f"{metric_by_instance_key} must be a list; received {type(metric_by_instance)}."
+            )
+        return _final_epoch_values_by_instance(metric_by_instance)
+
+    scalar_values = training_metrics.get(scalar_metric_key) or []
+    scalar_final = float(np.nan) if not scalar_values else float(scalar_values[-1])
+    return [scalar_final for _ in range(n_instances)]
+
+
+def plot_multi_sparsity_loss_summaries(
+    training_metrics: Dict[str, Any],
+    model_name: str,
+    seed_run_dir: str,
+    sparsity_coeff_list: List[float],
+) -> None:
+    if not sparsity_coeff_list:
+        raise ValueError("sparsity_coeff_list must be non-empty.")
+    plots_dir = _ensure_multi_sparsity_plots_dir(seed_run_dir, model_name)
+
+    epsilon = 1e-12
+    n_instances = len(sparsity_coeff_list)
+
+    final_reconstruction = _final_metric_values_for_sparsity_coeff_sweep(
+        training_metrics=training_metrics,
+        scalar_metric_key="loss_reconstruction",
+        metric_by_instance_key="loss_reconstruction_by_instance",
+        n_instances=n_instances,
+    )
+    final_sparsity = _final_metric_values_for_sparsity_coeff_sweep(
+        training_metrics=training_metrics,
+        scalar_metric_key="loss_sparsity",
+        metric_by_instance_key="loss_sparsity_by_instance",
+        n_instances=n_instances,
+    )
+    final_aux_loss: List[float] | None = None
+    if "loss_aux_by_instance" in training_metrics or "loss_aux" in training_metrics:
+        final_aux_loss = _final_metric_values_for_sparsity_coeff_sweep(
+            training_metrics=training_metrics,
+            scalar_metric_key="loss_aux",
+            metric_by_instance_key="loss_aux_by_instance",
+            n_instances=n_instances,
+        )
+
+    series = [
+        (
+            "reconstruction_loss",
+            "Reconstruction loss",
+            final_reconstruction,
+            "#ff7f0e",
+        ),
+        ("sparsity_loss", "Sparsity loss", final_sparsity, "#2ca02c"),
+    ]
+    if final_aux_loss is not None:
+        series.append(("aux_loss", "Auxiliary loss", final_aux_loss, "#9467bd"))
+
+    for prefix, metric_label, y_values, color in series:
+        if len(y_values) != len(sparsity_coeff_list):
+            raise ValueError(
+                "Final loss list length must match sparsity_coeff_list length."
+            )
+        coeffs_sorted, y_sorted = _sort_xy(
+            [float(value) for value in sparsity_coeff_list],
+            [float(value) for value in y_values],
+        )
+        log_coeffs_sorted = [
+            float(np.log10(max(float(value), epsilon))) for value in coeffs_sorted
+        ]
+
+        _plot_metric_vs_sparsity(
+            coeffs_sorted,
+            y_sorted,
+            x_label="sparsity_coeff",
+            y_label=metric_label,
+            title=f"{metric_label} vs sparsity_coeff - {model_name}",
+            output_path=os.path.join(plots_dir, f"{prefix}_vs_sparsity_coeff.png"),
+            color=color,
+        )
+        _plot_metric_vs_sparsity(
+            log_coeffs_sorted,
+            y_sorted,
+            x_label="log10(sparsity_coeff)",
+            y_label=metric_label,
+            title=f"{metric_label} vs log10(sparsity_coeff) - {model_name}",
+            output_path=os.path.join(plots_dir, f"{prefix}_vs_log_sparsity_coeff.png"),
+            color=color,
+        )
