@@ -81,6 +81,42 @@ def _copy_instance_0_parameters_to_all_instances(model: torch.nn.Module) -> None
             parameter.copy_(parameter[0:1].expand_as(parameter))
 
 
+def slice_trained_model_instance(
+    model: torch.nn.Module,
+    model_config: PolarityDialModelVariantConfig,
+    instance_index: int,
+    input_dim: int,
+    steps_per_epoch: int,
+    device: str,
+) -> torch.nn.Module:
+    if not hasattr(model, "n_instances"):
+        raise ValueError("Model does not expose n_instances.")
+    n_instances = int(getattr(model, "n_instances"))
+    if instance_index < 0 or instance_index >= n_instances:
+        raise ValueError(
+            f"instance_index must be within [0, {n_instances}); received {instance_index}."
+        )
+
+    sliced_model = _instantiate_model(
+        model_config=model_config,
+        n_instances=1,
+        input_dim=input_dim,
+        steps_per_epoch=steps_per_epoch,
+        device=device,
+    ).to(device)
+    source_parameters = dict(model.named_parameters())
+    with torch.no_grad():
+        for name, parameter in sliced_model.named_parameters():
+            if name not in source_parameters:
+                raise ValueError(f"Missing parameter '{name}' in source model.")
+            source_parameter = source_parameters[name]
+            if source_parameter.ndim >= 1 and source_parameter.shape[0] == n_instances:
+                parameter.copy_(source_parameter[instance_index : instance_index + 1])
+            else:
+                parameter.copy_(source_parameter)
+    return sliced_model
+
+
 def _log_step_progress(
     epoch: int,
     num_epochs: int,

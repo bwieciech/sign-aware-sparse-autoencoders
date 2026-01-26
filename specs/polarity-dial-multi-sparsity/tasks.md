@@ -57,18 +57,18 @@
 
 ## 3) Add multi-sparsity “subrun” artifact generation in the Protocol A runner
 
-- [ ] 3.1 Detect list mode at the seed-run level and compute `subrun_count`
+- [x] 3.1 Detect list mode at the seed-run level and compute `subrun_count`
   - In `sgnsae/experiments/polarity_dial/runner.py`, determine whether any model uses list mode.
   - Compute `subrun_count = max(1, max_list_len_across_models)` where scalar models contribute length 1.
   - Requirements: 4.2
 
-- [ ] 3.2 Train each model variant once per seed, using list parallelism when requested
+- [x] 3.2 Train each model variant once per seed, using list parallelism when requested
   - List-mode models: train once with `n_instances = len(list)`.
   - Scalar-mode models: train once with `n_instances = 1`.
   - Preserve deterministic per-model seeding.
   - Requirements: 3.1, 3.2, 3.5
 
-- [ ] 3.3 Implement “slice model to single instance” utility
+- [x] 3.3 Implement “slice model to single instance” utility
   - Add a helper (module location to be chosen during implementation) that:
     - constructs a same-class model with `n_instances = 1`,
     - copies parameter slice `i` into the new model’s instance-0 parameters for all per-instance parameters,
@@ -76,7 +76,7 @@
   - This helper is used for generating scalar-like artifacts for coefficient subruns.
   - Requirements: 4.3
 
-- [ ] 3.4 Write coefficient subrun directories under each seed
+- [x] 3.4 Write coefficient subrun directories under each seed
   - For each coefficient index `i` in `[0, subrun_count)`:
     - Create `<seed_run_dir>/<i>/`.
     - Create a scalar-style `config.json` containing only models included at index `i`:
@@ -90,7 +90,7 @@
     - Create `<subrun_dir>/comparison_summary.json` and `<subrun_dir>/gamma_diff_bar_comparison.png` for the models included in that subrun.
   - Requirements: 4.2, 4.3
 
-- [ ] 3.5 Define and implement sweep artifact behavior in list mode (no disabling)
+- [x] 3.5 Define and implement sweep artifact behavior in list mode (no disabling)
   - Ensure sweeps remain enabled and run as they do today.
   - Keep sweep artifacts at the seed-run root (no duplication into coefficient subruns), as per design.
   - Requirements: 4.4

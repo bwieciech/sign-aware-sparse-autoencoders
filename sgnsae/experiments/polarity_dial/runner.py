@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from dataclasses import asdict, replace
 from datetime import datetime
 from hashlib import sha256
@@ -39,6 +40,7 @@ from sgnsae.experiments.polarity_dial.sweeps import (
 from sgnsae.experiments.polarity_dial.training import (
     persist_model_artifacts,
     run_training_for_variant,
+    slice_trained_model_instance,
 )
 
 try:
@@ -133,6 +135,127 @@ def _log_wandb_artifacts(
     wandb_run.finish()
 
 
+def _model_uses_list_sparsity(model_config: PolarityDialModelVariantConfig) -> bool:
+    return isinstance(model_config.sparsity_coeff, list)
+
+
+def _model_sparsity_length(model_config: PolarityDialModelVariantConfig) -> int:
+    if isinstance(model_config.sparsity_coeff, list):
+        return len(model_config.sparsity_coeff)
+    return 1
+
+
+def _resolve_sparsity_coeff_for_index(
+    model_config: PolarityDialModelVariantConfig,
+    coeff_index: int,
+) -> Optional[float]:
+    if isinstance(model_config.sparsity_coeff, list):
+        if coeff_index >= len(model_config.sparsity_coeff):
+            return None
+        return float(model_config.sparsity_coeff[coeff_index])
+    return float(model_config.sparsity_coeff)
+
+
+def _resolve_subrun_count(models: List[PolarityDialModelVariantConfig]) -> int:
+    if not models:
+        raise ValueError("At least one model configuration must be provided.")
+    return max(_model_sparsity_length(model_config) for model_config in models)
+
+
+def _copy_seed_data_exports(seed_run_dir: str, subrun_dir: str) -> None:
+    source_dir = os.path.join(seed_run_dir, "data")
+    target_dir = os.path.join(subrun_dir, "data")
+    if not os.path.isdir(source_dir):
+        return
+    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+
+
+def _steps_per_epoch(num_train: int, batch_size: int) -> int:
+    return max(1, int((num_train + batch_size - 1) // batch_size))
+
+
+def _training_metrics_for_instance(
+    training_metrics: Dict[str, Any],
+    instance_index: int,
+) -> Dict[str, Any]:
+    if "loss_total_by_instance" not in training_metrics:
+        return training_metrics
+
+    metrics_for_instance: Dict[str, Any] = {
+        "epoch": list(training_metrics.get("epoch") or []),
+        "loss_total": list(training_metrics["loss_total_by_instance"][instance_index]),
+        "loss_reconstruction": list(
+            training_metrics["loss_reconstruction_by_instance"][instance_index]
+        ),
+        "loss_sparsity": list(
+            training_metrics["loss_sparsity_by_instance"][instance_index]
+        ),
+    }
+    if "loss_aux_by_instance" in training_metrics:
+        metrics_for_instance["loss_aux"] = list(
+            training_metrics["loss_aux_by_instance"][instance_index]
+        )
+    if "terminated_early" in training_metrics:
+        metrics_for_instance["terminated_early"] = True
+    if "model_seed" in training_metrics:
+        metrics_for_instance["model_seed"] = training_metrics["model_seed"]
+    return metrics_for_instance
+
+
+def _evaluate_trained_model(
+    experiment_config: PolarityDialExperimentConfig,
+    run_dir: str,
+    run_id: str,
+    model_config: PolarityDialModelVariantConfig,
+    model: torch.nn.Module,
+    training_metrics: Dict[str, Any],
+    data: Dict[str, torch.Tensor],
+) -> Dict[str, Any]:
+    model_dir = os.path.join(run_dir, "models", model_config.name)
+    wandb_run = _maybe_init_wandb(experiment_config, model_config.name, run_id)
+    persist_model_artifacts(model, training_metrics, model_config, model_dir)
+
+    alignment, axis_alignment, _ = align_decoder_and_features(
+        model,
+        data["feature_directions"],
+        experiment_config.evaluation,
+    )
+    calibration, scatter_data = compute_alignment_and_calibration(
+        model,
+        data["x_test"],
+        data["coefficients_test"],
+        alignment,
+        axis_alignment,
+        experiment_config.evaluation,
+    )
+    persist_alignment_and_calibration(model_dir, alignment, axis_alignment, calibration)
+
+    plot_calibration_scatter(scatter_data, model_config.name, model_dir)
+    plot_gamma_histograms(calibration, model_config.name, model_dir)
+    plot_gamma_strip(calibration, model_config.name, model_dir)
+    plot_training_loss(training_metrics, model_config.name, model_dir)
+    _log_wandb_artifacts(wandb_run, training_metrics, calibration)
+
+    parameter_count = int(sum(parameter.numel() for parameter in model.parameters()))
+    d_hidden_effective = (
+        int(getattr(model, "d_hidden"))
+        if hasattr(model, "d_hidden")
+        else int(model_config.d_hidden)
+    )
+    model_seed = training_metrics.get("model_seed")
+    return {
+        "model_dir": model_dir,
+        "calibration": calibration,
+        "metadata": {
+            "model_seed": model_seed,
+            "d_hidden": int(model_config.d_hidden),
+            "d_hidden_effective": d_hidden_effective,
+            "parameter_count": parameter_count,
+            "coverage_summary": axis_alignment.get("coverage_summary"),
+        },
+    }
+
+
 def _run_single_model(
     experiment_config: PolarityDialExperimentConfig,
     run_dir: str,
@@ -205,6 +328,104 @@ def _run_single_model(
     }
 
 
+def _run_multi_sparsity_subruns(
+    experiment_config: PolarityDialExperimentConfig,
+    seed_run_dir: str,
+    seed_run_id: str,
+    data: Dict[str, torch.Tensor],
+    device: str,
+) -> None:
+    subrun_count = _resolve_subrun_count(experiment_config.models)
+    trained_by_model_name: Dict[str, Dict[str, Any]] = {}
+    for model_config in experiment_config.models:
+        model_seed = _stable_model_seed(int(experiment_config.data.seed), model_config.name)
+        set_random_seed(model_seed)
+        dataloader_generator = torch.Generator().manual_seed(model_seed)
+        training_output = run_training_for_variant(
+            experiment_config,
+            data,
+            model_config,
+            device,
+            dataloader_generator=dataloader_generator,
+        )
+        training_output["training_metrics"]["model_seed"] = model_seed
+        trained_by_model_name[model_config.name] = training_output
+
+    num_train = int(data["x_train"].shape[0])
+    input_dim = int(data["x_train"].shape[1])
+
+    for coeff_index in range(subrun_count):
+        subrun_dir = os.path.join(seed_run_dir, str(coeff_index))
+        os.makedirs(subrun_dir, exist_ok=True)
+        persist_environment_metadata(subrun_dir)
+        _copy_seed_data_exports(seed_run_dir, subrun_dir)
+
+        subrun_models: List[PolarityDialModelVariantConfig] = []
+        base_model_configs_by_name = {
+            model_config.name: model_config for model_config in experiment_config.models
+        }
+        for model_config in experiment_config.models:
+            sparsity_coeff = _resolve_sparsity_coeff_for_index(model_config, coeff_index)
+            if sparsity_coeff is None:
+                continue
+            subrun_models.append(replace(model_config, sparsity_coeff=sparsity_coeff))
+
+        subrun_config = replace(
+            experiment_config,
+            models=subrun_models,
+            run_id=f"{seed_run_id}_idx{coeff_index}",
+        )
+        _persist_run_config(subrun_config, subrun_dir)
+
+        calibration_by_model: Dict[str, Dict[str, Any]] = {}
+        metadata_by_model: Dict[str, Dict[str, Any]] = {}
+        for model_config in subrun_models:
+            base_model_config = base_model_configs_by_name[model_config.name]
+            trained = trained_by_model_name[model_config.name]
+            training_metrics = trained["training_metrics"]
+            if _model_uses_list_sparsity(base_model_config):
+                steps_per_epoch = _steps_per_epoch(num_train, base_model_config.batch_size)
+                model = slice_trained_model_instance(
+                    trained["model"],
+                    base_model_config,
+                    coeff_index,
+                    input_dim=input_dim,
+                    steps_per_epoch=steps_per_epoch,
+                    device=device,
+                )
+                training_metrics = _training_metrics_for_instance(
+                    training_metrics, instance_index=coeff_index
+                )
+            else:
+                model = trained["model"]
+
+            model_result = _evaluate_trained_model(
+                subrun_config,
+                subrun_dir,
+                subrun_config.run_id or f"{seed_run_id}_idx{coeff_index}",
+                model_config,
+                model,
+                training_metrics,
+                data,
+            )
+            calibration_by_model[model_config.name] = model_result["calibration"]
+            metadata_by_model[model_config.name] = model_result["metadata"]
+
+        comparison_summary = _build_comparison_summary(
+            calibration_by_model, metadata_by_model
+        )
+        comparison_path = os.path.join(subrun_dir, "comparison_summary.json")
+        with open(comparison_path, "w") as f:
+            json.dump(comparison_summary, f, indent=2)
+        plot_gamma_comparison(
+            {
+                name: calibration["summary"]
+                for name, calibration in calibration_by_model.items()
+            },
+            os.path.join(subrun_dir, "gamma_diff_bar_comparison.png"),
+        )
+
+
 def _build_comparison_summary(
     calibration_by_model: Dict[str, Dict[str, Any]],
     model_metadata: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -271,28 +492,34 @@ def run_polarity_dial(
     export_data_summary(run_dir, config.data, data, config.sample_preview_count)
     set_random_seed(int(config.data.seed))
 
-    calibration_by_model: Dict[str, Dict[str, Any]] = {}
-    metadata_by_model: Dict[str, Dict[str, Any]] = {}
-    for model_config in config.models:
-        model_result = _run_single_model(
-            config, run_dir, run_id, model_config, data, device
-        )
-        calibration_by_model[model_config.name] = model_result["calibration"]
-        metadata_by_model[model_config.name] = model_result["metadata"]
+    uses_list_sparsity = any(
+        _model_uses_list_sparsity(model_config) for model_config in config.models
+    )
+    if uses_list_sparsity:
+        _run_multi_sparsity_subruns(config, run_dir, run_id, data, device)
+    else:
+        calibration_by_model: Dict[str, Dict[str, Any]] = {}
+        metadata_by_model: Dict[str, Dict[str, Any]] = {}
+        for model_config in config.models:
+            model_result = _run_single_model(
+                config, run_dir, run_id, model_config, data, device
+            )
+            calibration_by_model[model_config.name] = model_result["calibration"]
+            metadata_by_model[model_config.name] = model_result["metadata"]
 
-    comparison_summary = _build_comparison_summary(
-        calibration_by_model, metadata_by_model
-    )
-    comparison_path = os.path.join(run_dir, "comparison_summary.json")
-    with open(comparison_path, "w") as f:
-        json.dump(comparison_summary, f, indent=2)
-    plot_gamma_comparison(
-        {
-            name: calibration["summary"]
-            for name, calibration in calibration_by_model.items()
-        },
-        os.path.join(run_dir, "gamma_diff_bar_comparison.png"),
-    )
+        comparison_summary = _build_comparison_summary(
+            calibration_by_model, metadata_by_model
+        )
+        comparison_path = os.path.join(run_dir, "comparison_summary.json")
+        with open(comparison_path, "w") as f:
+            json.dump(comparison_summary, f, indent=2)
+        plot_gamma_comparison(
+            {
+                name: calibration["summary"]
+                for name, calibration in calibration_by_model.items()
+            },
+            os.path.join(run_dir, "gamma_diff_bar_comparison.png"),
+        )
 
     if config.sweeps.sweep_mode in {"sparsity", "both"}:
         sparsity_summary = run_sparsity_sweep(config, run_dir, data, device)
