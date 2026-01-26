@@ -2,7 +2,7 @@
 
 ## 1) Expand gradient-independence unit tests (must happen first)
 
-- [ ] 1.1 Extend `tests/test_model_instance_gradient_independence.py` to test each loss component
+- [x] 1.1 Extend `tests/test_model_instance_gradient_independence.py` to test each loss component
   - Add coverage for `loss_tensor_key` in:
     - `"losses"`
     - `"reconstruction_losses"`
@@ -17,7 +17,7 @@
   - Keep the existing parameter filtering rule: only assert slice-level conditions for parameters whose grad has leading dimension `n_instances`.
   - Requirements: 1.1, 1.2, 1.3, 1.4
 
-- [ ] 1.2 Add targeted “broadcasted y_true” coverage
+- [x] 1.2 Add targeted “broadcasted y_true” coverage
   - Add at least one test per model family where:
     - `y_true` is provided as `(batch, d_in)` (broadcasted across instances),
     - gradients still do not mix across instances.
@@ -141,4 +141,3 @@
 - [ ] 6.2 Measure coverage for modified/new code
   - Use `coverage.py` to measure coverage for files changed under `sgnsae/experiments/polarity_dial` and `tests/`.
   - Aim for ~100% coverage of added/modified logic (excluding scripts).
-
