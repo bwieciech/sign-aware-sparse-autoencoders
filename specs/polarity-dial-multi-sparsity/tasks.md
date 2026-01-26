@@ -25,23 +25,23 @@
 
 ## 2) Enable list-valued `sparsity_coeff` parallelism in Protocol A training
 
-- [ ] 2.1 Update model instantiation to support `n_instances > 1`
+- [x] 2.1 Update model instantiation to support `n_instances > 1`
   - Modify `sgnsae/experiments/polarity_dial/training.py`:
     - Plumb `n_instances` into `_instantiate_model(...)`.
     - For list mode, set `n_instances = len(sparsity_coeff_list)`.
     - For scalar mode, keep `n_instances = 1`.
   - Requirements: 3.1, 3.2
 
-- [ ] 2.2 Ensure identical initialization across instances in list mode
+- [x] 2.2 Ensure identical initialization across instances in list mode
   - After instantiation in list mode, copy instance-0 parameter values into every instance slice for all parameters with a leading instance dimension.
   - Requirements: 3.1
 
-- [ ] 2.3 Build `sparsity_coeffs` tensors correctly for both modes
+- [x] 2.3 Build `sparsity_coeffs` tensors correctly for both modes
   - Scalar mode: `sparsity_coeffs.shape == (1,)`.
   - List mode: `sparsity_coeffs.shape == (n_instances,)`, aligned with coefficient index.
   - Requirements: 3.3
 
-- [ ] 2.4 Track per-instance training metrics in list mode while preserving scalar-mode output format
+- [x] 2.4 Track per-instance training metrics in list mode while preserving scalar-mode output format
   - Keep existing scalar keys and structure unchanged when `n_instances == 1`.
   - In list mode, record per-instance epoch series for:
     - total loss
@@ -51,7 +51,7 @@
   - Include `sparsity_coeff_list` (exact list) in training metrics for list mode.
   - Requirements: 3.4, 4.1
 
-- [ ] 2.5 Make dead-latent resampling bookkeeping per-instance
+- [x] 2.5 Make dead-latent resampling bookkeeping per-instance
   - Ensure `inactive_latents_count` has shape `(n_instances, d_hidden)` and is updated per-instance.
   - Requirements: 3.1
 

@@ -745,7 +745,7 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
         # when & then
         with self.assertRaises(ValueError):
             training_module._instantiate_model(
-                config, input_dim=2, steps_per_epoch=1, device="cpu"
+                config, n_instances=1, input_dim=2, steps_per_epoch=1, device="cpu"
             )
 
     def test_instantiate_model_supports_signed_soft_threshold(self) -> None:
@@ -766,7 +766,7 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
 
         # when
         model = training_module._instantiate_model(
-            config, input_dim=2, steps_per_epoch=2, device="cpu"
+            config, n_instances=1, input_dim=2, steps_per_epoch=2, device="cpu"
         )
 
         # then
@@ -950,7 +950,7 @@ class TestPolarityDialTrainingUtilities(unittest.TestCase):
 
         # when
         model = training_module._instantiate_model(
-            config, input_dim=2, steps_per_epoch=2, device="cpu"
+            config, n_instances=1, input_dim=2, steps_per_epoch=2, device="cpu"
         )
 
         # then

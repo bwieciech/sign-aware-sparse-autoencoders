@@ -1,9 +1,8 @@
 import json
 import os
 import sys
-from collections import defaultdict
 from dataclasses import asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from torch import Tensor
@@ -18,6 +17,7 @@ from sgnsae.models import GatedSAE, SAE, SignedSoftThresholdSAE
 
 def _instantiate_model(
     model_config: PolarityDialModelVariantConfig,
+    n_instances: int,
     input_dim: int,
     steps_per_epoch: int,
     device: str,
@@ -27,7 +27,7 @@ def _instantiate_model(
     )
     if model_config.sae_class == SAE.__name__:
         return SAE(
-            n_instances=1,
+            n_instances=n_instances,
             d_in=input_dim,
             d_hidden=model_config.d_hidden,
             resample_latents_threshold=resample_latents_threshold,
@@ -38,7 +38,7 @@ def _instantiate_model(
         )
     if model_config.sae_class == GatedSAE.__name__:
         return GatedSAE(
-            n_instances=1,
+            n_instances=n_instances,
             d_in=input_dim,
             d_hidden=model_config.d_hidden,
             resample_latents_threshold=resample_latents_threshold,
@@ -50,13 +50,35 @@ def _instantiate_model(
         )
     if model_config.sae_class == SignedSoftThresholdSAE.__name__:
         return SignedSoftThresholdSAE(
-            n_instances=1,
+            n_instances=n_instances,
             d_in=input_dim,
             d_hidden=model_config.d_hidden,
             resample_latents_threshold=resample_latents_threshold,
             device=device,
         )
     raise ValueError(f"Unknown SAE class: {model_config.sae_class}")
+
+
+def _resolve_sparsity_coeff_list(
+    model_config: PolarityDialModelVariantConfig,
+) -> List[float]:
+    sparsity_coeff = model_config.sparsity_coeff
+    if isinstance(sparsity_coeff, list):
+        return [float(value) for value in sparsity_coeff]
+    return [float(sparsity_coeff)]
+
+
+def _copy_instance_0_parameters_to_all_instances(model: torch.nn.Module) -> None:
+    if not hasattr(model, "n_instances"):
+        return
+    n_instances = int(getattr(model, "n_instances"))
+    if n_instances <= 1:
+        return
+    with torch.no_grad():
+        for parameter in model.parameters():
+            if parameter.ndim < 1 or parameter.shape[0] != n_instances:
+                continue
+            parameter.copy_(parameter[0:1].expand_as(parameter))
 
 
 def _log_step_progress(
@@ -110,28 +132,38 @@ def run_training_for_variant(
         generator=dataloader_generator,
     )
     steps_per_epoch = len(dataloader)
+    sparsity_coeff_list = _resolve_sparsity_coeff_list(model_config)
+    n_instances = len(sparsity_coeff_list)
     model = _instantiate_model(
-        model_config, data["x_train"].shape[1], steps_per_epoch, device
+        model_config, n_instances, data["x_train"].shape[1], steps_per_epoch, device
     ).to(device)
+    _copy_instance_0_parameters_to_all_instances(model)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=model_config.learning_rate, betas=model_config.adam_betas
     )
     sparsity_coeffs = torch.tensor(
-        [model_config.sparsity_coeff], device=device, dtype=torch.float32
+        sparsity_coeff_list, device=device, dtype=torch.float32
     )
-    inactive_latents_count = torch.zeros(1, model_config.d_hidden, device=device)
+    inactive_latents_count = torch.zeros(n_instances, model_config.d_hidden, device=device)
 
-    training_metrics: Dict[str, Any] = {
-        "epoch": [],
-        "loss_total": [],
-        "loss_reconstruction": [],
-        "loss_sparsity": [],
-    }
+    uses_multiple_instances = n_instances > 1
+    training_metrics: Dict[str, Any] = {"epoch": []}
+    if uses_multiple_instances:
+        training_metrics["sparsity_coeff_list"] = sparsity_coeff_list
+        training_metrics["loss_total_by_instance"] = [[] for _ in range(n_instances)]
+        training_metrics["loss_reconstruction_by_instance"] = [
+            [] for _ in range(n_instances)
+        ]
+        training_metrics["loss_sparsity_by_instance"] = [[] for _ in range(n_instances)]
+    else:
+        training_metrics["loss_total"] = []
+        training_metrics["loss_reconstruction"] = []
+        training_metrics["loss_sparsity"] = []
     terminated_early = False
 
     for epoch in range(model_config.num_epochs):
         model.train()
-        epoch_totals = defaultdict(float)
+        epoch_totals_by_loss: Dict[str, Tensor] = {}
         for step, (batch,) in enumerate(dataloader):
             optimizer.zero_grad()
             output = model(batch)
@@ -157,7 +189,10 @@ def run_training_for_variant(
             mean_active_latents = latents_active.sum(dim=-1).float().mean().item()
 
             for loss_name, loss_values in losses_dict.items():
-                epoch_totals[loss_name] += loss_values.mean().item()
+                loss_values_cpu = loss_values.detach().to(device="cpu", dtype=torch.float32)
+                if loss_name not in epoch_totals_by_loss:
+                    epoch_totals_by_loss[loss_name] = torch.zeros_like(loss_values_cpu)
+                epoch_totals_by_loss[loss_name] += loss_values_cpu
             if experiment_config.verbose and (
                 (step + 1) % experiment_config.log_every_n_steps == 0
                 or step + 1 == steps_per_epoch
@@ -176,25 +211,60 @@ def run_training_for_variant(
                 f"\n[{model_config.name}] NaN detected in losses at epoch {epoch + 1}; terminating early."
             )
             break
-        epoch_mean_losses = {
-            name: total / steps_per_epoch for name, total in epoch_totals.items()
+        epoch_mean_losses_by_loss = {
+            name: totals / steps_per_epoch for name, totals in epoch_totals_by_loss.items()
+        }
+        epoch_mean_losses_for_logging = {
+            name: float(values.mean().item())
+            for name, values in epoch_mean_losses_by_loss.items()
         }
         if experiment_config.verbose and (
             (epoch + 1) % experiment_config.log_every_n_epochs == 0
             or epoch + 1 == model_config.num_epochs
         ):
-            _log_epoch_summary(epoch, epoch_mean_losses, model_config)
+            _log_epoch_summary(epoch, epoch_mean_losses_for_logging, model_config)
 
         training_metrics["epoch"].append(epoch + 1)
-        training_metrics["loss_total"].append(epoch_mean_losses["losses"])
-        training_metrics["loss_reconstruction"].append(
-            epoch_mean_losses["reconstruction_losses"]
-        )
-        training_metrics["loss_sparsity"].append(epoch_mean_losses["sparsity_losses"])
-        if "aux_loss" in epoch_mean_losses:
-            training_metrics.setdefault("loss_aux", []).append(
-                epoch_mean_losses["aux_loss"]
+        if uses_multiple_instances:
+            for instance_index in range(n_instances):
+                training_metrics["loss_total_by_instance"][instance_index].append(
+                    float(epoch_mean_losses_by_loss["losses"][instance_index].item())
+                )
+                training_metrics["loss_reconstruction_by_instance"][instance_index].append(
+                    float(
+                        epoch_mean_losses_by_loss["reconstruction_losses"][
+                            instance_index
+                        ].item()
+                    )
+                )
+                training_metrics["loss_sparsity_by_instance"][instance_index].append(
+                    float(
+                        epoch_mean_losses_by_loss["sparsity_losses"][instance_index].item()
+                    )
+                )
+            if "aux_loss" in epoch_mean_losses_by_loss:
+                if "loss_aux_by_instance" not in training_metrics:
+                    training_metrics["loss_aux_by_instance"] = [
+                        [] for _ in range(n_instances)
+                    ]
+                for instance_index in range(n_instances):
+                    training_metrics["loss_aux_by_instance"][instance_index].append(
+                        float(epoch_mean_losses_by_loss["aux_loss"][instance_index].item())
+                    )
+        else:
+            training_metrics["loss_total"].append(
+                float(epoch_mean_losses_by_loss["losses"][0].item())
             )
+            training_metrics["loss_reconstruction"].append(
+                float(epoch_mean_losses_by_loss["reconstruction_losses"][0].item())
+            )
+            training_metrics["loss_sparsity"].append(
+                float(epoch_mean_losses_by_loss["sparsity_losses"][0].item())
+            )
+            if "aux_loss" in epoch_mean_losses_by_loss:
+                training_metrics.setdefault("loss_aux", []).append(
+                    float(epoch_mean_losses_by_loss["aux_loss"][0].item())
+                )
 
     if terminated_early:
         training_metrics["terminated_early"] = True
