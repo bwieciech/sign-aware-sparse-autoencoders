@@ -393,6 +393,27 @@ class TestPolarityDialConfigValidation(unittest.TestCase):
                 name="model", **base_kwargs
             )
 
+    def test_model_config_rejects_non_numeric_scalar_sparsity_coeff(self) -> None:
+        # given
+        base_kwargs = {
+            "sae_class": "SAE",
+            "sign_aware": False,
+            "single_activation_offset": False,
+            "reset_activation_offsets_on_resample": False,
+            "d_hidden": 2,
+            "sparsity_coeff": "bad",
+            "learning_rate": 0.01,
+            "num_epochs": 1,
+            "batch_size": 2,
+            "adam_betas": (0.9, 0.999),
+        }
+
+        # when & then
+        with self.assertRaises(ValueError):
+            _ = config_module.PolarityDialModelVariantConfig(
+                name="model", **base_kwargs
+            )
+
     def test_model_config_rejects_symmetric_magnitude_without_sign_aware(self) -> None:
         # given
         base_kwargs = {

@@ -142,9 +142,9 @@
 
 ## 6) Coverage + regression checks
 
-- [ ] 6.1 Run unit tests and verify passing status
+- [x] 6.1 Run unit tests and verify passing status
   - Run the full `unittest` suite.
 
-- [ ] 6.2 Measure coverage for modified/new code
+- [x] 6.2 Measure coverage for modified/new code
   - Use `coverage.py` to measure coverage for files changed under `sgnsae/experiments/polarity_dial` and `tests/`.
   - Aim for ~100% coverage of added/modified logic (excluding scripts).

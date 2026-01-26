@@ -132,7 +132,7 @@ class TestToyModelGeometryValidationConfig(unittest.TestCase):
             os.path.join(
                 repo_root,
                 "configs",
-                "toy_model_geometry_validation_paper_superposition_tolerance_k16_ap2.json",
+                "toy_model_geometry_validation_paper_superposition_tolerance_k16.json",
             ),
         ]
 
