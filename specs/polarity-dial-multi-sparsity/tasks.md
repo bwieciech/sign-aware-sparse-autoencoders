@@ -55,6 +55,13 @@
   - Ensure `inactive_latents_count` has shape `(n_instances, d_hidden)` and is updated per-instance.
   - Requirements: 3.1
 
+- [x] 2.6 Allow list-valued `sparsity_coeff` in configs
+  - Update `PolarityDialModelVariantConfig` validation to accept either:
+    - a single non-negative numeric value, or
+    - a non-empty list of non-negative numeric values.
+  - Ensure mixed float/list usage across models remains valid.
+  - Requirements: 2.1, 2.2, 2.3
+
 ## 3) Add multi-sparsity “subrun” artifact generation in the Protocol A runner
 
 - [x] 3.1 Detect list mode at the seed-run level and compute `subrun_count`
@@ -114,7 +121,7 @@
 
 ## 5) Add Protocol A list-mode end-to-end tests (runner + artifacts)
 
-- [ ] 5.1 Add a small end-to-end list-mode smoke test
+- [x] 5.1 Add a small end-to-end list-mode smoke test
   - Create a tiny config in a temp directory with:
     - at least one model in list mode with length 2 or 3,
     - at least one model in scalar mode,
@@ -125,11 +132,11 @@
     - model directories exist only for models included at that coefficient index.
   - Requirements: 4.2, 4.3
 
-- [ ] 5.2 Add assertions for seed-level per-model multi-sparsity plot artifacts
+- [x] 5.2 Add assertions for seed-level per-model multi-sparsity plot artifacts
   - Assert plots exist for list-mode models under `<seed_run_dir>/plots/multi_sparsity/<model_name>/`.
   - Requirements: 5.1, 5.2
 
-- [ ] 5.3 Ensure scalar-mode behavior remains unchanged
+- [x] 5.3 Ensure scalar-mode behavior remains unchanged
   - Keep existing Protocol A scalar-mode smoke and artifact tests passing without modifications to their expectations unless strictly necessary.
   - Requirements: 4.1
 

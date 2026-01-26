@@ -155,7 +155,7 @@ class PolarityDialModelVariantConfig:
     single_activation_offset: bool
     reset_activation_offsets_on_resample: bool
     d_hidden: int
-    sparsity_coeff: float
+    sparsity_coeff: float | List[float]
     learning_rate: float
     num_epochs: int
     batch_size: int
@@ -171,10 +171,40 @@ class PolarityDialModelVariantConfig:
         _validate_positive_int(self.d_hidden, "d_hidden")
         _validate_positive_int(self.num_epochs, "num_epochs")
         _validate_positive_int(self.batch_size, "batch_size")
-        if self.sparsity_coeff < 0:
-            raise ValueError(
-                f"sparsity_coeff must be non-negative; received {self.sparsity_coeff}."
-            )
+        if isinstance(self.sparsity_coeff, list):
+            if not self.sparsity_coeff:
+                raise ValueError(
+                    "sparsity_coeff must be a non-empty list when provided as a list."
+                )
+            normalized: List[float] = []
+            for index, sparsity_coeff_value in enumerate(self.sparsity_coeff):
+                if not isinstance(sparsity_coeff_value, (int, float)) or isinstance(
+                    sparsity_coeff_value, bool
+                ):
+                    raise ValueError(
+                        "sparsity_coeff values must be numeric; received "
+                        f"sparsity_coeff[{index}]={sparsity_coeff_value}."
+                    )
+                sparsity_coeff_float = float(sparsity_coeff_value)
+                if sparsity_coeff_float < 0:
+                    raise ValueError(
+                        "sparsity_coeff values must be non-negative; received "
+                        f"sparsity_coeff[{index}]={sparsity_coeff_float}."
+                    )
+                normalized.append(sparsity_coeff_float)
+            self.sparsity_coeff = normalized
+        else:
+            if not isinstance(self.sparsity_coeff, (int, float)) or isinstance(
+                self.sparsity_coeff, bool
+            ):
+                raise ValueError(
+                    f"sparsity_coeff must be numeric; received {self.sparsity_coeff}."
+                )
+            self.sparsity_coeff = float(self.sparsity_coeff)
+            if self.sparsity_coeff < 0:
+                raise ValueError(
+                    f"sparsity_coeff must be non-negative; received {self.sparsity_coeff}."
+                )
         if self.learning_rate <= 0:
             raise ValueError(
                 f"learning_rate must be positive; received {self.learning_rate}."
