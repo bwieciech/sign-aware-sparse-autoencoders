@@ -69,10 +69,10 @@ For each epoch, for each metric tensor returned by `calculate_losses()`:
 - Record `epoch_mean = epoch_total / steps_per_epoch` as a Python list of floats.
 
 Storage format:
-- Scalar mode: keep the current format (`loss_total`, `loss_reconstruction`, `loss_sparsity`, optional `loss_aux` as `List[float]`).
+- Scalar mode: keep the current format (`loss_total`, `loss_reconstruction`, `loss_sparsity`, `mean_active_latents`, optional `loss_aux` as `List[float]`).
 - List mode: store per-instance metrics as `List[List[float]]` aligned by coefficient index:
   - `loss_total_by_instance: List[List[float]]` where outer length is `n_instances`, inner length is epochs.
-  - similarly for reconstruction/sparsity/aux.
+  - similarly for reconstruction/sparsity/aux/mean_active_latents.
 
 Additionally, store:
 - `model_seed` (existing behavior),
@@ -95,7 +95,7 @@ If at least one model uses list mode, the seed run directory acts as a container
   - the original config (including list-valued `sparsity_coeff`) and environment metadata,
   - the shared data export artifacts for that seed,
   - optional sweep artifacts (same placement as today),
-  - per-model multi-sparsity summary plots (Requirement 5).
+  - per-model multi-sparsity summary plots (Requirements 5 and 6).
 - Each coefficient subrun (`<seed_run_dir>/<i>/`) contains a “normal” scalar-mode run layout:
   - `config.json`, `environment.json`, run-level comparison artifacts,
   - `data/` exports (copied from the seed root),
@@ -134,9 +134,11 @@ Plots:
 - `reconstruction_loss_vs_log_sparsity_coeff.png`
 - `aux_loss_vs_sparsity_coeff.png` (only if the model provides aux loss)
 - `aux_loss_vs_log_sparsity_coeff.png` (only if applicable)
+- `mean_active_latents_vs_sparsity_coeff.png`
+- `mean_active_latents_vs_log_sparsity_coeff.png`
 
 Y-values:
-- Use the final epoch’s per-instance mean loss value for the corresponding metric.
+- Use the final epoch’s per-instance mean value for the corresponding metric.
 
 Log-x handling:
 - Since `sparsity_coeff` may be `0.0`, log plots use `log10(max(coeff, eps))` with `eps = 1e-12`.
@@ -186,4 +188,3 @@ Backward compatibility tests remain unchanged and must still pass.
 - If a model’s `sparsity_coeff` list is empty, config validation already fails.
 - In list mode, if `subrun_count` resolves to `0` (should be impossible due to validation), raise `RuntimeError`.
 - When generating plots on the log scale, avoid `log(0)` by clamping with `eps`.
-

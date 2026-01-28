@@ -180,7 +180,9 @@ def run_training_for_variant(
     sparsity_coeffs = torch.tensor(
         sparsity_coeff_list, device=device, dtype=torch.float32
     )
-    inactive_latents_count = torch.zeros(n_instances, model_config.d_hidden, device=device)
+    inactive_latents_count = torch.zeros(
+        n_instances, model_config.d_hidden, device=device
+    )
 
     uses_multiple_instances = n_instances > 1
     training_metrics: Dict[str, Any] = {"epoch": []}
@@ -191,15 +193,22 @@ def run_training_for_variant(
             [] for _ in range(n_instances)
         ]
         training_metrics["loss_sparsity_by_instance"] = [[] for _ in range(n_instances)]
+        training_metrics["mean_active_latents_by_instance"] = [
+            [] for _ in range(n_instances)
+        ]
     else:
         training_metrics["loss_total"] = []
         training_metrics["loss_reconstruction"] = []
         training_metrics["loss_sparsity"] = []
+        training_metrics["mean_active_latents"] = []
     terminated_early = False
 
     for epoch in range(model_config.num_epochs):
         model.train()
         epoch_totals_by_loss: Dict[str, Tensor] = {}
+        epoch_total_mean_active_latents_by_instance = torch.zeros(
+            n_instances, dtype=torch.float32
+        )
         for step, (batch,) in enumerate(dataloader):
             optimizer.zero_grad()
             output = model(batch)
@@ -222,10 +231,22 @@ def run_training_for_variant(
                 torch.zeros_like(inactive_latents_count),
                 inactive_latents_count,
             )
-            mean_active_latents = latents_active.sum(dim=-1).float().mean().item()
+            mean_active_latents_by_instance = (
+                latents_active.sum(dim=-1)
+                .float()
+                .mean(dim=1)
+                .detach()
+                .to(device="cpu", dtype=torch.float32)
+            )
+            epoch_total_mean_active_latents_by_instance += (
+                mean_active_latents_by_instance
+            )
+            mean_active_latents = float(mean_active_latents_by_instance.mean().item())
 
             for loss_name, loss_values in losses_dict.items():
-                loss_values_cpu = loss_values.detach().to(device="cpu", dtype=torch.float32)
+                loss_values_cpu = loss_values.detach().to(
+                    device="cpu", dtype=torch.float32
+                )
                 if loss_name not in epoch_totals_by_loss:
                     epoch_totals_by_loss[loss_name] = torch.zeros_like(loss_values_cpu)
                 epoch_totals_by_loss[loss_name] += loss_values_cpu
@@ -248,7 +269,8 @@ def run_training_for_variant(
             )
             break
         epoch_mean_losses_by_loss = {
-            name: totals / steps_per_epoch for name, totals in epoch_totals_by_loss.items()
+            name: totals / steps_per_epoch
+            for name, totals in epoch_totals_by_loss.items()
         }
         epoch_mean_losses_for_logging = {
             name: float(values.mean().item())
@@ -261,12 +283,17 @@ def run_training_for_variant(
             _log_epoch_summary(epoch, epoch_mean_losses_for_logging, model_config)
 
         training_metrics["epoch"].append(epoch + 1)
+        epoch_mean_active_latents_by_instance = (
+            epoch_total_mean_active_latents_by_instance / steps_per_epoch
+        )
         if uses_multiple_instances:
             for instance_index in range(n_instances):
                 training_metrics["loss_total_by_instance"][instance_index].append(
                     float(epoch_mean_losses_by_loss["losses"][instance_index].item())
                 )
-                training_metrics["loss_reconstruction_by_instance"][instance_index].append(
+                training_metrics["loss_reconstruction_by_instance"][
+                    instance_index
+                ].append(
                     float(
                         epoch_mean_losses_by_loss["reconstruction_losses"][
                             instance_index
@@ -275,8 +302,15 @@ def run_training_for_variant(
                 )
                 training_metrics["loss_sparsity_by_instance"][instance_index].append(
                     float(
-                        epoch_mean_losses_by_loss["sparsity_losses"][instance_index].item()
+                        epoch_mean_losses_by_loss["sparsity_losses"][
+                            instance_index
+                        ].item()
                     )
+                )
+                training_metrics["mean_active_latents_by_instance"][
+                    instance_index
+                ].append(
+                    float(epoch_mean_active_latents_by_instance[instance_index].item())
                 )
             if "aux_loss" in epoch_mean_losses_by_loss:
                 if "loss_aux_by_instance" not in training_metrics:
@@ -285,7 +319,9 @@ def run_training_for_variant(
                     ]
                 for instance_index in range(n_instances):
                     training_metrics["loss_aux_by_instance"][instance_index].append(
-                        float(epoch_mean_losses_by_loss["aux_loss"][instance_index].item())
+                        float(
+                            epoch_mean_losses_by_loss["aux_loss"][instance_index].item()
+                        )
                     )
         else:
             training_metrics["loss_total"].append(
@@ -296,6 +332,9 @@ def run_training_for_variant(
             )
             training_metrics["loss_sparsity"].append(
                 float(epoch_mean_losses_by_loss["sparsity_losses"][0].item())
+            )
+            training_metrics["mean_active_latents"].append(
+                float(epoch_mean_active_latents_by_instance[0].item())
             )
             if "aux_loss" in epoch_mean_losses_by_loss:
                 training_metrics.setdefault("loss_aux", []).append(

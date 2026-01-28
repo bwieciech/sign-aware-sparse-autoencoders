@@ -100,6 +100,7 @@ class TestPolarityDialMultiSparsitySmoke(unittest.TestCase):
                 seed_run_dir=run_dir,
                 model_name="list_sae_short",
                 expected_prefixes=[
+                    "mean_active_latents",
                     "reconstruction_loss",
                     "sparsity_loss",
                 ],
@@ -108,6 +109,7 @@ class TestPolarityDialMultiSparsitySmoke(unittest.TestCase):
                 seed_run_dir=run_dir,
                 model_name="list_gated_long",
                 expected_prefixes=[
+                    "mean_active_latents",
                     "reconstruction_loss",
                     "sparsity_loss",
                     "aux_loss",
@@ -253,6 +255,7 @@ class TestPolarityDialMultiSparsitySmoke(unittest.TestCase):
         self.assertIn("loss_total", training_metrics)
         self.assertIn("loss_reconstruction", training_metrics)
         self.assertIn("loss_sparsity", training_metrics)
+        self.assertIn("mean_active_latents", training_metrics)
         self.assertNotIn("loss_total_by_instance", training_metrics)
         self.assertNotIn("loss_reconstruction_by_instance", training_metrics)
         self.assertNotIn("loss_sparsity_by_instance", training_metrics)

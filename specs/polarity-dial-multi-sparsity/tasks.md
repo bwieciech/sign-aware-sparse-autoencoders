@@ -119,6 +119,14 @@
   - For each list-mode model, use the final-epoch per-instance metrics to populate the plot y-values.
   - Requirements: 5.1, 5.3
 
+- [x] 4.3 Add plotting utilities for per-model mean active latents multi-sparsity summaries
+  - Extend `sgnsae/experiments/polarity_dial/plotting.py` with functions that write, per model:
+    - mean active latents vs `sparsity_coeff`,
+    - mean active latents vs `log(sparsity_coeff)`.
+  - Write outputs under `<seed_run_dir>/plots/multi_sparsity/<model_name>/`.
+  - Update Protocol A list-mode tests to assert these plots exist.
+  - Requirements: 6.1, 6.2, 6.3
+
 ## 5) Add Protocol A list-mode end-to-end tests (runner + artifacts)
 
 - [x] 5.1 Add a small end-to-end list-mode smoke test

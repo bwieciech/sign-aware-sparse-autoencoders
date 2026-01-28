@@ -192,6 +192,10 @@ def _training_metrics_for_instance(
             training_metrics["loss_sparsity_by_instance"][instance_index]
         ),
     }
+    if "mean_active_latents_by_instance" in training_metrics:
+        metrics_for_instance["mean_active_latents"] = list(
+            training_metrics["mean_active_latents_by_instance"][instance_index]
+        )
     if "loss_aux_by_instance" in training_metrics:
         metrics_for_instance["loss_aux"] = list(
             training_metrics["loss_aux_by_instance"][instance_index]

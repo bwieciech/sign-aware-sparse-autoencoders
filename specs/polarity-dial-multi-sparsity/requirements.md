@@ -102,3 +102,14 @@ This spec adds support for training multiple `sparsity_coeff` values in parallel
 2. The plots SHALL be “one set per model” (i.e., separate files per model, not a single combined plot with all models).
 3. The plots SHALL use per-instance training metrics corresponding to the model’s coefficient list.
 
+### Requirement 6: Seed-level per-model mean active latents plots across sparsity coefficients
+
+**User Story:** As a researcher, I want quick per-model summaries of how mean active latents change as a function of `sparsity_coeff` when training multiple coefficients in parallel.
+
+#### Acceptance Criteria
+
+1. WHEN a model uses list sparsity mode, THEN the seed run directory SHALL include, for that model, plots of:
+   - mean active latents vs `sparsity_coeff`,
+   - mean active latents vs `log(sparsity_coeff)`.
+2. The plots SHALL be “one set per model” (i.e., separate files per model, not a single combined plot with all models).
+3. The plots SHALL use per-instance training metrics corresponding to the model’s coefficient list.

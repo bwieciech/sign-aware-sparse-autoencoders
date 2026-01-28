@@ -440,6 +440,12 @@ def plot_multi_sparsity_loss_summaries(
         metric_by_instance_key="loss_sparsity_by_instance",
         n_instances=n_instances,
     )
+    final_mean_active_latents = _final_metric_values_for_sparsity_coeff_sweep(
+        training_metrics=training_metrics,
+        scalar_metric_key="mean_active_latents",
+        metric_by_instance_key="mean_active_latents_by_instance",
+        n_instances=n_instances,
+    )
     final_aux_loss: List[float] | None = None
     if "loss_aux_by_instance" in training_metrics or "loss_aux" in training_metrics:
         final_aux_loss = _final_metric_values_for_sparsity_coeff_sweep(
@@ -457,6 +463,12 @@ def plot_multi_sparsity_loss_summaries(
             "#ff7f0e",
         ),
         ("sparsity_loss", "Sparsity loss", final_sparsity, "#2ca02c"),
+        (
+            "mean_active_latents",
+            "Mean active latents",
+            final_mean_active_latents,
+            "#1f77b4",
+        ),
     ]
     if final_aux_loss is not None:
         series.append(("aux_loss", "Auxiliary loss", final_aux_loss, "#9467bd"))
@@ -464,7 +476,7 @@ def plot_multi_sparsity_loss_summaries(
     for prefix, metric_label, y_values, color in series:
         if len(y_values) != len(sparsity_coeff_list):
             raise ValueError(
-                "Final loss list length must match sparsity_coeff_list length."
+                "Final metric list length must match sparsity_coeff_list length."
             )
         coeffs_sorted, y_sorted = _sort_xy(
             [float(value) for value in sparsity_coeff_list],
