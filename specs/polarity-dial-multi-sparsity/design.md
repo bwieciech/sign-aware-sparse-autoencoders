@@ -4,6 +4,8 @@
 
 This design adds list-valued `sparsity_coeff` support to the Protocol A (Polarity Dial) experiment runner so that, for a fixed seed and model variant, multiple sparsity settings can be trained in parallel using the existing `n_instances` “slicing” semantics of `sgnsae/models`.
 
+This design also specifies sweep semantics when list-valued `sparsity_coeff` is present. In particular, asymmetry sweeps must evaluate every list instance. Otherwise the implementation can train multiple instances but silently record only instance 0 in sweep outputs.
+
 Key properties:
 - Backward compatible when `sparsity_coeff` is a single float.
 - No global constraints on list length: each model may use either a float or a list, and lists may have different lengths.
@@ -50,7 +52,7 @@ For each model variant:
 - If scalar mode: instantiate model with `n_instances = 1` and `sparsity_coeffs = [value]`.
 - If list mode: instantiate model with `n_instances = len(value_list)` and `sparsity_coeffs = value_list`.
 
-The input batch is shared across instances (broadcasted along the instance dimension), and `calculate_losses()` returns per-instance loss tensors. The training loop uses `losses.sum().backward()`; because parameters are sliced by instance, gradients should not mix across instances (validated by dedicated gradient tests).
+The input batch is shared across instances (broadcasted along the instance dimension), and `calculate_losses()` returns per-instance loss tensors. The training loop uses `losses.sum().backward()`. Because parameters are sliced by instance, gradients should not mix across instances (validated by dedicated gradient tests).
 
 ### Initialization across instances (list mode)
 
@@ -84,6 +86,8 @@ The training loop’s inactivity tracking is updated to be per instance:
 - `inactive_latents_count` has shape `(n_instances, d_hidden)`.
 - Updates and `resample_dead_latents()` operate on this full tensor, maintaining per-instance resampling decisions.
 
+Important nuance: gradient independence is necessary but not sufficient for strict equivalence to independent scalar runs. Dead-latent resampling can consume randomness differently depending on which instances resample. See “Dead-latent resampling RNG independence” below.
+
 ## Artifact Generation Design
 
 ### High-level structure
@@ -94,7 +98,7 @@ If at least one model uses list mode, the seed run directory acts as a container
 - Root (`<seed_run_dir>/`) contains:
   - the original config (including list-valued `sparsity_coeff`) and environment metadata,
   - the shared data export artifacts for that seed,
-  - optional sweep artifacts (same placement as today),
+  - sweep artifacts (see “Sweeps in list-sparsity runs”),
   - per-model multi-sparsity summary plots (Requirements 5 and 6).
 - Each coefficient subrun (`<seed_run_dir>/<i>/`) contains a “normal” scalar-mode run layout:
   - `config.json`, `environment.json`, run-level comparison artifacts,
@@ -108,7 +112,7 @@ Evaluation and artifact writing are currently implemented for `n_instances=1` mo
 - Copy parameter values for instance slice `i` into the new model’s instance 0 parameters for every parameter that has a leading instance dimension.
 - Run evaluation, calibration, and plotting on the sliced model exactly as in scalar mode.
 
-This produces per-coefficient subruns whose artifacts are indistinguishable from training that coefficient in scalar mode, up to the fact that they were trained in parallel.
+This produces per-coefficient subruns whose artifacts are indistinguishable from training that coefficient in scalar mode, except for the RNG nuance described below.
 
 ### Models with scalar `sparsity_coeff` in list-mode runs
 
@@ -143,20 +147,106 @@ Y-values:
 Log-x handling:
 - Since `sparsity_coeff` may be `0.0`, log plots use `log10(max(coeff, eps))` with `eps = 1e-12`.
 
-## Sweeps Compatibility
+### Raw plot data persistence (regeneration policy)
 
-Sweeps remain enabled and continue to run exactly as today.
+The raw x/y data required to regenerate the multi-sparsity plots is considered persisted if it can be reconstructed from the coefficient subruns.
 
-Placement:
-- Sweep artifacts remain at the seed run root (current behavior), e.g.:
-  - `<seed_run_dir>/mse_vs_l0_tradeoff.json`
-  - `<seed_run_dir>/mse_vs_l0_tradeoff.png`
-  - `<seed_run_dir>/asymmetry_sweep_summary.json`
-  - `<seed_run_dir>/asymmetry_sweep_calibration.png`
+For a list-mode model `M` with list length `k`:
+
+1. For each coefficient index `i` in `[0, k)`:
+   - x is read from `<seed_run_dir>/<i>/config.json` for model `M` via the scalar `sparsity_coeff` field.
+   - y is read from `<seed_run_dir>/<i>/models/M/training_metrics.json` as the final element of:
+     - `loss_sparsity[-1]`
+     - `loss_reconstruction[-1]`
+     - optional `loss_aux[-1]`
+     - `mean_active_latents[-1]`
+
+2. Sort points by x to match plotting behavior.
+
+If an implementation change breaks this reconstructability, then persist an explicit JSON per model containing the plot data (x list and y lists) alongside the plots.
+
+## Sweeps in list-sparsity runs
+
+Sweeps remain enabled and are written at the seed run root (not duplicated into coefficient subruns).
+
+However, list mode requires explicit semantics because the existing evaluation code for Protocol A assumes `n_instances=1` and reads instance 0 internally. Without additional handling, a sweep can train a multi-instance model but silently report only instance 0.
+
+### Sweep type 1: Sparsity sweep (`sweep_mode` includes `"sparsity"`)
+
+Semantics (unchanged):
+- The sparsity sweep is driven by `experiment_config.sweeps.sparsity_coeff_grid`.
+- For each grid value `λ`, each model is trained and evaluated using `sparsity_coeff = λ` (scalar), regardless of whether the base model config specified a list.
 
 Rationale:
-- Sweep results are conceptually attached to the seed run, not to a coefficient index.
-- Duplicating sweep outputs into each coefficient subrun would create redundant and potentially confusing artifacts without adding information.
+- The entire purpose of a sparsity sweep is to vary sparsity coefficient externally.
+- Multiplying the sweep by an internal list would turn it into a 2D sweep (`λ_grid × λ_list`) and break existing behavior.
+
+Implementation sketch:
+```python
+for sparsity_coeff in sparsity_coeff_grid:
+    for model_config in experiment_config.models:
+        model_config_for_point = replace(model_config, sparsity_coeff=float(sparsity_coeff))
+        train_and_eval(model_config_for_point)
+```
+
+### Sweep type 2: Asymmetry sweep (`sweep_mode` includes `"asymmetry"`)
+
+Semantics (extended for list mode):
+- At every sweep point (for example a specific `positive_sign_prob` and a specific tail parameter):
+  1. Train each base model config exactly once.
+     - Scalar mode uses `n_instances=1`.
+     - List mode uses `n_instances=len(list)`.
+  2. Record metrics for:
+     - scalar models under their base model name, and
+     - list-mode models under expanded sweep model names, one per coefficient index.
+
+Expanded sweep model names:
+- Use a deterministic naming scheme that is collision-resistant. Recommended format:
+  - `{base}__sparsity={coeff:.6g}__idx={i}`
+- Including `idx` avoids collisions if the list contains duplicates.
+
+Mapping metadata:
+- In addition to the flat `models` list used for plotting, persist an explicit mapping (dictionary) from base model name to:
+  - expanded name, coefficient value, and index.
+This avoids downstream tools needing to parse strings.
+
+Implementation approach (recommended): slice per instance.
+- Train a list-mode model once (multi-instance).
+- For each coefficient index `i`, call the existing “slice to single instance” utility to create an `n_instances=1` model.
+- Evaluate the sliced model using the existing evaluation functions unchanged.
+This is consistent with the approach used for coefficient subruns.
+
+## Dead-latent resampling RNG independence (Remark 3.1)
+
+### Why gradients are not the whole story
+
+Even when gradient independence holds, two runs can diverge due to randomness in dead-latent resampling:
+- resampling is triggered per instance based on that instance’s activity,
+- a shared RNG stream means the order and number of random draws depends on which instances resample.
+
+This can break strict bitwise equivalence between:
+- training instance 0 in a multi-instance run, and
+- training the same configuration as a single-instance run.
+
+### Option A: document and accept
+
+If the project does not require strict equivalence to independent scalar runs, document:
+
+- Parallel multi-instance training is gradient independent but not guaranteed bitwise-identical to independent scalar runs when dead-latent resampling occurs.
+
+### Option B: per-instance RNG (more correct)
+
+Implement per-instance RNG streams for resampling.
+
+Design sketch:
+1. Update `resample_dead_latents()` to accept either:
+   - no generators (old behavior), or
+   - a list of `torch.Generator` objects, one per instance.
+2. In training (list mode):
+   - create `generators[i] = torch.Generator(device=device).manual_seed(model_seed + i)`
+   - pass `generators` into `model.resample_dead_latents(...)`
+3. Resample instance-by-instance using its own generator:
+   - RNG draws for instance `i` are independent of whether other instances resampled.
 
 ## Testing Strategy
 
@@ -180,6 +270,21 @@ Add Protocol A tests for list-mode runs:
 - Verify each subrun contains the expected run-level and per-model artifacts.
 - Verify scalar models appear in every subrun; list models appear only where index exists.
 - Verify per-model multi-sparsity plots exist under `<seed_run_dir>/plots/multi_sparsity/...`.
+
+### Sweep tests (new)
+
+Add tests that specifically cover asymmetry sweeps with list-mode models:
+- When a base model has `sparsity_coeff=[λ0, λ1]`, the sweep output must contain two expanded model names for that base model at every sweep point.
+- The asymmetry sweep summary JSON must include:
+  - the expanded `models` list used for plotting,
+  - and the mapping metadata (so downstream scripts do not need to parse names).
+- Scalar-only configs must preserve the existing sweep output schema.
+
+### RNG resampling tests (optional, only if Option B is implemented)
+
+If per-instance RNG is implemented, add a regression-style test that checks:
+- RNG draws for one instance do not depend on whether other instances resampled.
+This can be done by forcing deterministic resampling conditions and comparing instance-0 resampled weights between `n_instances=1` and `n_instances=2` runs with the same seed.
 
 Backward compatibility tests remain unchanged and must still pass.
 
