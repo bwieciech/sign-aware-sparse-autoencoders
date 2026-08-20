@@ -1,0 +1,113 @@
+{
+  "output_dir": "./experiments/attn-mid/smollm/sign_aware_gated_sae_full_width_v2",
+  "modality": "text",
+  "device": "cuda",
+  "stages": [
+    "cache"
+  ],
+  "resume": false,
+  "overwrite": false,
+  "seed": [
+    0,
+    1,
+    2
+  ],
+  "llm": {
+    "model_id": "HuggingFaceTB/SmolLM3-3B",
+    "torch_dtype": "float16"
+  },
+  "data": {
+    "backend": "hf",
+    "dataset_id": "Skylion007/openwebtext",
+    "split": "train",
+    "streaming": true,
+    "text_field": "text"
+  },
+  "hook": {
+    "hook_name": "attn",
+    "layer_selector": "mid",
+    "module_path": "layers.18.self_attn"
+  },
+  "cache": {
+    "llm_batch_size": 2,
+    "max_seq_len": 128,
+    "max_sequences": 250000,
+    "vectors_per_shard": 655360,
+    "cache_overwrite": false,
+    "split_method": "shard_ranges",
+    "train_fraction": 0.9,
+    "val_fraction": 0.05,
+    "test_fraction": 0.05,
+    "cache_seed": 0,
+    "compute_dtype": "float16",
+    "storage_dtype": "float16",
+    "doc_separator": "eos",
+    "text_field": "text",
+    "store_tokens": true,
+    "store_positions": true,
+    "store_sequence_ids": true
+  },
+  "training": {
+    "train_steps": 450000,
+    "batch_size": 128,
+    "max_train_samples": null,
+    "max_val_samples": null,
+    "max_test_samples": null,
+    "learning_rate": 0.0003,
+    "log_every_n_steps": 1,
+    "resample_dead_latents": true,
+    "resample_latents_steps": 12500,
+    "mixed_precision": true,
+    "mixed_precision_dtype": "float16",
+    "multi_sparsity_max_instances": 8,
+    "threshold_warmup_steps": 80000,
+    "checkpoint_model_steps": 112500,
+    "dump_training_metrics_steps": 25000,
+    "grad_clip_norm": 0.5
+  },
+  "variants": [
+    {
+      "name": "sign_aware_gated_sae",
+      "sae_class": "GatedSAE",
+      "sign_aware": true,
+      "d_hidden": 32768,
+      "sparsity_coeff": [
+        0.00012345,
+        0.0001516,
+        0.00018618,
+        0.00022865,
+        0.0002808,
+        0.00034485,
+        0.0004235,
+        0.0005201
+      ],
+      "delta_pos_init": 0.15,
+      "delta_neg_init": 0.15,
+      "reset_activation_offsets_on_resample": false
+    }
+  ],
+  "loss_recovered": {
+    "enabled": true,
+    "max_eval_sequences": 384,
+    "llm_batch_size": 4,
+    "seed": 0
+  },
+  "latent_examples": {
+    "enabled": true,
+    "sample_size": 16384,
+    "max_latents": 64,
+    "max_examples_per_latent": 128,
+    "activation_threshold": 0.0,
+    "latent_selection": "top_by_max_abs",
+    "target_subruns": "matched_l0_anchor",
+    "anchor_l0": 64.0,
+    "seeds": [
+      0
+    ],
+    "output_format": "json",
+    "highlight_markers": [
+      "<<",
+      ">>"
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+{"text": "Sparse autoencoders can recover interpretable directions in language model activations."}
+{"text": "This fixture is intentionally tiny and deterministic for offline CI runs."}
+{"text": "Sign-aware gating allows one latent to represent opposite evidence along a shared axis."}
+{"text": "Activation caching reuses frozen transformer activations across multiple SAE variants."}
+{"text": "TopK and AbsTopK baselines provide useful sparsity controls for benchmark comparisons."}
