@@ -2,6 +2,22 @@
 
 Code for the *[Sign-Aware Gated Sparse Autoencoders: Modeling Anticorrelated Features with Bi-Jump-ReLU Activations](https://arxiv.org/abs/2605.28149)* paper (arXiv:2605.28149).
 
+Please cite as:
+
+```bibtex
+@misc{wieciech2026signaware,
+  author        = {Wieciech, Bartosz and Awrahman, Zmnako and Czelej, Marcin and
+                   Jaramillo Velasquez, Victor Hugo and Stobieniecka, Wioletta},
+  title         = {Sign-Aware Gated Sparse Autoencoders: Modeling Anticorrelated Features with {Bi-Jump-ReLU} Activations},
+  year          = {2026},
+  eprint        = {2605.28149},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  doi           = {10.48550/arXiv.2605.28149},
+  url           = {https://arxiv.org/abs/2605.28149}
+}
+```
+
 ## Polarity Dial Experiment (Protocol A)
 
 This experiment trains SAEs on a synthetic dataset where each ground-truth feature can appear with either sign, but with asymmetric sign frequency and asymmetric magnitude distributions (LogNormal for positives, Exponential for negatives). The goal is to reproduce the Protocol A results in the paper by running the paper config (16 seeds, 0–15), then confirming that the expected artifacts were produced and that evaluation is axis-aware (so non-negative baselines that learn both \(+u_j\) and \(-u_j\) are credited correctly).
